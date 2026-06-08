@@ -1,0 +1,44 @@
+experiment:
+  name: exp_r_color_aug
+  description: "Exp R: DINOv2-B + Attention head + color augmentation + stronger regularization"
+
+model:
+  backbone_name: dinov2_vitb14
+  head_type: attention
+  vpt:
+    enabled: false
+    num_tokens: 10
+  dropout: 0.3
+  num_classes: 3
+  use_grad_checkpoint: true
+
+data:
+  image_size: 336
+  batch_size: 32
+  num_workers: 4
+  unk_label: excluded
+
+training:
+  epochs: 50
+  optimizer: lion
+  backbone_lr: 1.0e-5
+  lr: 5.0e-5
+  weight_decay: 3.0e-2
+  warmup_ratio: 0.1
+  early_stopping_patience: 10
+  label_smoothing: 0.1
+  focal_gamma: 2.0
+  seed: 42
+  use_learnable_weight: true
+
+data_augmentation:
+  use_weighted_sampler: false
+  # NOTE: get_train_transforms() in src/data/transforms.py is currently hardcoded.
+  # Before running, update get_train_transforms() to read these fields from config,
+  # or pass them explicitly via train.py _build_dataloaders().
+  color_jitter:
+    brightness: 0.3
+    contrast: 0.3
+    saturation: 0.2
+    hue: 0.1
+  random_grayscale_p: 0.15

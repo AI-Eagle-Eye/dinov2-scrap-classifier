@@ -1,0 +1,70 @@
+# Data
+data/
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tif
+*.tiff
+
+# Smoke / 더미 테스트 산출물만 무시
+# 실제 실험(exp_b_s 등)·평가 결과는 커밋 가능 (바이너리 파일은 아래 확장자 패턴으로 별도 차단)
+experiments/*_smoke/
+reports/*_smoke/
+reports/eda_smoke/
+
+# 납품용 ONNX / 중간 산출물 디렉토리 — 대용량 바이너리, 로컬 보관
+exports/
+
+# 바이너리 모델 파일 — 크기/보안상 커밋 금지
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.npy
+
+# Test fixtures — 픽스처가 생성, 커밋 불필요
+tests/fixtures/dummy_crop/
+tests/fixtures/tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# md
+AGENT.md
+CLAUDE.md
+ROADMAP.md
+SPEC.md
+
+# Dataset
+dataset
+
+#reports
+reports
+
+#EXPERIMENT
+docs
+experiments
+
+# Claude Code local settings
+.claude/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+# Numpy compressed arrays (data cache)
+*.npz
+
+# Environment variables
+.env
+.env.*

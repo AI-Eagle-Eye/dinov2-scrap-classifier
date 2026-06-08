@@ -1,0 +1,37 @@
+experiment:
+  name: exp_n_eva02
+  description: "Exp N: EVA-02-B backbone (448x448, timm) + attention head + focal loss"
+
+model:
+  backbone_name: eva02_base_patch14_448
+  head_type: attention
+  vpt:
+    enabled: false
+    num_tokens: 10
+  dropout: 0.1
+  num_classes: 3
+  use_grad_checkpoint: true
+
+data:
+  image_size: 448
+  batch_size: 16
+  num_workers: 4
+  unk_label: excluded
+
+training:
+  epochs: 50
+  optimizer: lion
+  backbone_lr: 1.0e-5
+  lr: 5.0e-5
+  weight_decay: 1.0e-2
+  warmup_ratio: 0.1
+  early_stopping_patience: 10
+  label_smoothing: 0.1
+  focal_gamma: 2.0
+  seed: 42
+  loss_type: focal
+  use_learnable_weight: false
+  lambda_dr: 0.0
+
+data_augmentation:
+  use_weighted_sampler: false

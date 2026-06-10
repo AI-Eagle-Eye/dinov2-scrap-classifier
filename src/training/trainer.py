@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import random
 import time
 from dataclasses import dataclass, field
@@ -11,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from lion_pytorch import Lion
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -42,17 +43,22 @@ def set_seed(seed: int = 42) -> None:
 class EarlyStopping:
     patience: int = 10
     min_delta: float = 1e-4
-    best_value: float = field(default=float("-inf"))  # higher is better (danger_precision)
+    best_metric: str = "danger_precision"
+    best_value: float = field(default=float("-inf"))
     counter: int = 0
 
-    def update(self, value: float, das: float) -> bool:
-        """danger_as_safe < DANGER_AS_SAFE_LIMIT일 때만 danger_precision(높을수록 좋음) 개선 여부 확인.
+    def __post_init__(self) -> None:
+        # val_loss는 낮을수록 좋으므로 초기값을 +inf로 설정
+        if self.best_metric == "val_loss":
+            self.best_value = float("+inf")
 
-        das >= DANGER_AS_SAFE_LIMIT면 카운트 증가 없이 False 반환.
-        """
-        if das >= DANGER_AS_SAFE_LIMIT:
-            return False
-        if value > self.best_value + self.min_delta:
+    def update(self, value: float) -> bool:
+        """순수 metric 기준 patience 카운터 관리. das 제약은 _update_best_model에서만 처리."""
+        if self.best_metric == "val_loss":
+            improved = value < self.best_value - self.min_delta
+        else:
+            improved = value > self.best_value + self.min_delta
+        if improved:
             self.best_value = value
             self.counter = 0
         else:
@@ -60,17 +66,43 @@ class EarlyStopping:
         return self.counter >= self.patience
 
 
+def _backbone_llrd_groups(
+    backbone: nn.Module,
+    backbone_lr: float,
+    llrd_decay: float,
+) -> list[dict[str, Any]]:
+    """블록별 lr 감쇠 파라미터 그룹 생성. DINOv2/_dino 및 EVA02/_model 모두 지원."""
+    inner = getattr(backbone, "_dino", None) or getattr(backbone, "_model", None)
+    if inner is None or not hasattr(inner, "blocks"):
+        return [{"params": list(backbone.parameters()), "lr": backbone_lr}]
+
+    blocks: list[nn.Module] = list(inner.blocks)
+    num_blocks = len(blocks)
+    block_ids: set[int] = {id(p) for block in blocks for p in block.parameters()}
+    non_block = [p for p in backbone.parameters() if id(p) not in block_ids]
+
+    groups: list[dict[str, Any]] = []
+    if non_block:
+        groups.append({"params": non_block, "lr": backbone_lr * (llrd_decay ** num_blocks)})
+    for i, block in enumerate(blocks):
+        distance = num_blocks - 1 - i  # 마지막 블록 distance=0 → lr 감쇠 없음
+        groups.append({"params": list(block.parameters()), "lr": backbone_lr * (llrd_decay ** distance)})
+    return groups
+
+
 def _build_optimizer(
     model: nn.Module,
     backbone_lr: float,
     head_lr: float,
     weight_decay: float,
+    llrd_decay: float = 1.0,
     learnable_weight: LearnableClassWeight | None = None,
-) -> tuple[Lion, bool]:
+) -> tuple[Lion, bool, int]:
     """backbone/head 분리 파라미터 그룹으로 Lion 옵티마이저 생성.
 
     backbone_lr=0이면 backbone을 frozen(requires_grad=False)하고 optimizer에서 제외.
-    Returns (optimizer, has_backbone_group).
+    llrd_decay<1.0이면 블록별 lr 감쇠 적용.
+    Returns (optimizer, has_backbone_group, head_group_idx).
     """
     backbone: nn.Module | None = getattr(model, "backbone", None)
 
@@ -85,11 +117,14 @@ def _build_optimizer(
     has_backbone_group = backbone is not None and backbone_lr > 0
 
     if has_backbone_group:
-        param_groups: list[dict[str, Any]] = [
-            {"params": list(backbone.parameters()), "lr": backbone_lr},
-            {"params": head_params, "lr": head_lr},
-        ]
+        if llrd_decay < 1.0:
+            backbone_groups = _backbone_llrd_groups(backbone, backbone_lr, llrd_decay)
+        else:
+            backbone_groups = [{"params": list(backbone.parameters()), "lr": backbone_lr}]
+        head_group_idx = len(backbone_groups)
+        param_groups: list[dict[str, Any]] = backbone_groups + [{"params": head_params, "lr": head_lr}]
     else:
+        head_group_idx = 0
         param_groups = [{"params": head_params, "lr": head_lr}]
 
     if learnable_weight is not None:
@@ -99,18 +134,25 @@ def _build_optimizer(
             "weight_decay": 0.0,
         })
 
-    return Lion(param_groups, weight_decay=weight_decay), has_backbone_group
+    return Lion(param_groups, weight_decay=weight_decay), has_backbone_group, head_group_idx
 
 
 def _build_scheduler(
     optimizer: Lion,
     epochs: int,
     warmup_ratio: float,
+    warmup_type: str = "linear",
 ) -> SequentialLR:
-    """Linear warmup + CosineAnnealingLR."""
+    """Warmup (linear or cosine) + CosineAnnealingLR."""
     warmup_epochs = max(1, int(epochs * warmup_ratio))
     cosine_epochs = max(1, epochs - warmup_epochs)
-    warmup = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
+    if warmup_type == "cosine":
+        def _cosine_fn(step: int) -> float:
+            progress = (step + 1) / warmup_epochs
+            return 0.5 * (1.0 - math.cos(math.pi * min(progress, 1.0)))
+        warmup: LinearLR | LambdaLR = LambdaLR(optimizer, lr_lambda=_cosine_fn)
+    else:
+        warmup = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
     cosine = CosineAnnealingLR(optimizer, T_max=cosine_epochs, eta_min=1e-7)
     return SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
 
@@ -133,6 +175,7 @@ class Trainer:
         weight_decay: float = 1e-2,
         epochs: int = 30,
         warmup_ratio: float = 0.1,
+        warmup_type: str = "linear",
         early_stopping_patience: int = 10,
         label_smoothing: float = 0.1,
         focal_gamma: float = 2.0,
@@ -141,6 +184,9 @@ class Trainer:
         loss_type: Literal["focal", "supcon", "ce", "ce_dr", "focal_dr"] = "focal",
         lambda_dr: float = 0.0,
         num_classes: int = 3,
+        best_metric: str = "danger_precision",
+        das_constraint: float = 0.15,
+        llrd_decay: float = 1.0,
     ) -> None:
         self.model = model
         self.train_loader = train_loader
@@ -177,27 +223,32 @@ class Trainer:
 
         self.supcon: SupConLoss | None = SupConLoss() if loss_type == "supcon" else None
 
-        self.optimizer, self._has_backbone_group = _build_optimizer(
-            model, backbone_lr, lr, weight_decay, self.learnable_weight
+        self.optimizer, self._has_backbone_group, self._head_group_idx = _build_optimizer(
+            model, backbone_lr, lr, weight_decay, llrd_decay, self.learnable_weight
         )
-        self.scheduler = _build_scheduler(self.optimizer, epochs, warmup_ratio)
+        self.scheduler = _build_scheduler(self.optimizer, epochs, warmup_ratio, warmup_type)
 
-        self.early_stopping = EarlyStopping(patience=early_stopping_patience)
+        self._best_metric = best_metric
+        self._das_constraint = das_constraint
+        self.early_stopping = EarlyStopping(
+            patience=early_stopping_patience, best_metric=best_metric
+        )
 
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._csv_path = self.log_dir / "train_log.csv"
         self._cm_path = self.log_dir / "confusion_matrix.csv"
         self._best_model_path = self.ckpt_manager.save_dir / "best_model.pth"
-        self._best_danger_prec: float = float("-inf")
+        self._best_metric_value: float = float("+inf") if best_metric == "val_loss" else float("-inf")
         self._best_acc: float = 0.0
         self._best_epoch: int = 0
         self._init_log_csv()
 
     def _get_lrs(self) -> tuple[float, float]:
-        """(backbone_lr, head_lr) 반환. backbone group이 없으면 backbone_lr=0."""
+        """(backbone_lr, head_lr) 반환. backbone_lr은 마지막 블록(최고 lr) 기준."""
         groups = self.optimizer.param_groups
         if self._has_backbone_group:
-            return groups[0]["lr"], groups[1]["lr"]
+            # head_group_idx - 1 = 마지막 backbone 그룹 (LLRD: 최상위 블록, 비LLRD: 단일 그룹)
+            return groups[self._head_group_idx - 1]["lr"], groups[self._head_group_idx]["lr"]
         return 0.0, groups[0]["lr"]
 
     def _call_criterion(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -266,16 +317,20 @@ class Trainer:
         return metrics
 
     def _update_best_model(self, val_m: dict[str, float]) -> bool:
-        """danger_as_safe < DANGER_AS_SAFE_LIMIT 조건 하에 danger_precision 최대 기준 best 갱신. 갱신 여부 반환."""
-        if val_m["danger_as_safe_rate"] >= DANGER_AS_SAFE_LIMIT:
+        """das_constraint 통과 epoch 중 best_metric 기준 best 갱신. 갱신 여부 반환."""
+        if val_m["danger_as_safe_rate"] >= self._das_constraint:
             return False
         acc = val_m["accuracy"]
-        danger_prec = val_m["precision_danger"]
-        improved = danger_prec > self._best_danger_prec or (
-            danger_prec == self._best_danger_prec and acc > self._best_acc
-        )
+        if self._best_metric == "val_loss":
+            metric_val = val_m["loss"]
+            improved = metric_val < self._best_metric_value
+        else:
+            metric_val = val_m["precision_danger"]
+            improved = metric_val > self._best_metric_value or (
+                metric_val == self._best_metric_value and acc > self._best_acc
+            )
         if improved:
-            self._best_danger_prec = danger_prec
+            self._best_metric_value = metric_val
             self._best_acc = acc
             torch.save(self.model.state_dict(), self._best_model_path)
         return improved
@@ -435,7 +490,8 @@ class Trainer:
                     f"{class_w_str}"
                 )
 
-            if self.early_stopping.update(val_m["precision_danger"], val_m["danger_as_safe_rate"]):
+            es_value = val_m["loss"] if self._best_metric == "val_loss" else val_m["precision_danger"]
+            if self.early_stopping.update(es_value):
                 if verbose:
                     print(f"[train] Early stop at epoch {epoch} (patience={self.early_stopping.patience})")
                 break

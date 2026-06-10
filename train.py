@@ -16,7 +16,7 @@ from typing import Any
 
 import torch
 import yaml
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 from src.data.dataset import HazardDataset, compute_class_weights
 from src.data.transforms import get_train_transforms, get_val_transforms
@@ -72,15 +72,43 @@ def _build_dataloaders(cfg: dict[str, Any]) -> tuple[DataLoader, DataLoader, tor
     image_size: int = d.get("image_size", 336)
     batch_size: int = d.get("batch_size", 32)
     num_workers: int = d.get("num_workers", 4)
+    unk_label: str = d.get("unk_label", "excluded")
+    label_col: str = d.get("label_col", "confirmed_label")
+    split_col: str = d.get("split_col", "split")
+    ds_kwargs: dict[str, Any] = {"unk_label": unk_label, "label_col": label_col, "split_col": split_col}
+    if "csv_path" in d:
+        ds_kwargs["csv_path"] = Path(d["csv_path"])
 
     aug_cfg: dict[str, Any] | None = cfg.get("data_augmentation") or None
-    train_ds = HazardDataset("train", transform=get_train_transforms(image_size, aug_cfg))
-    val_ds = HazardDataset("val", transform=get_val_transforms(image_size))
+    padding_variants: list[str] | None = d.get("padding_variants")
+
+    if padding_variants:
+        img_base = Path("dataset/classification")
+        per_variant: list[HazardDataset] = [
+            HazardDataset(
+                "train",
+                transform=get_train_transforms(image_size, aug_cfg),
+                img_root=img_base / variant,
+                **ds_kwargs,
+            )
+            for variant in padding_variants
+        ]
+        train_ds: HazardDataset | ConcatDataset = ConcatDataset(per_variant)
+        # 모든 variant는 동일 파일셋이므로 첫 번째로 class_weights 계산
+        weights_ds = per_variant[0]
+    else:
+        train_ds = HazardDataset(
+            "train", transform=get_train_transforms(image_size, aug_cfg), **ds_kwargs
+        )
+        weights_ds = train_ds
+
+    # val/test는 crops_25pct 단일 기준 유지 (평가 일관성)
+    val_ds = HazardDataset("val", transform=get_val_transforms(image_size), **ds_kwargs)
 
     if len(train_ds) == 0:
         sys.exit("[ERROR] train split이 비어 있습니다. CSV 경로와 split 컬럼을 확인하세요.")
 
-    class_weights = compute_class_weights(train_ds)
+    class_weights = compute_class_weights(weights_ds)
 
     train_loader = DataLoader(
         train_ds,
@@ -164,10 +192,11 @@ def main() -> None:
         class_weights=class_weights,
         device=device,
         backbone_lr=t_cfg.get("backbone_lr", 0.0),
-        lr=t_cfg.get("lr", 1e-5),
+        lr=t_cfg.get("head_lr", t_cfg.get("lr", 1e-5)),
         weight_decay=t_cfg.get("weight_decay", 1e-2),
         epochs=t_cfg.get("epochs", 30),
         warmup_ratio=t_cfg.get("warmup_ratio", 0.1),
+        warmup_type=t_cfg.get("warmup_type", "linear"),
         early_stopping_patience=t_cfg.get("early_stopping_patience", 10),
         label_smoothing=t_cfg.get("label_smoothing", 0.1),
         focal_gamma=t_cfg.get("focal_gamma", 2.0),
@@ -176,6 +205,9 @@ def main() -> None:
         loss_type=t_cfg.get("loss_type", "focal"),
         lambda_dr=t_cfg.get("lambda_dr", 0.0),
         num_classes=cfg["model"].get("num_classes", 3),
+        best_metric=t_cfg.get("best_metric", "danger_precision"),
+        das_constraint=t_cfg.get("das_constraint", 0.15),
+        llrd_decay=t_cfg.get("llrd_decay", 1.0),
     )
 
     _maybe_resume(args, model, trainer)

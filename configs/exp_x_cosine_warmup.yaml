@@ -1,0 +1,40 @@
+experiment:
+  name: exp_x_cosine_warmup
+  description: "Exp X: cosine warmup + backbone_lr 5e-6 / head_lr 2e-5 / wd 3e-2 / patience 8"
+
+model:
+  backbone_name: dinov2_vitb14
+  head_type: attention
+  vpt:
+    enabled: false
+    num_tokens: 10
+  dropout: 0.1
+  num_classes: 3
+  use_grad_checkpoint: true
+  use_learnable_weight: false
+
+data:
+  image_size: 336
+  batch_size: 32
+  num_workers: 4
+  unk_label: excluded
+
+training:
+  epochs: 50
+  optimizer: lion
+  backbone_lr: 5.0e-6
+  head_lr: 2.0e-5
+  weight_decay: 3.0e-2
+  warmup_ratio: 0.2
+  warmup_type: cosine
+  early_stopping_patience: 8
+  best_metric: val_loss
+  best_mode: min
+  das_constraint: 0.15
+  label_smoothing: 0.1
+  focal_gamma: 2.0
+  seed: 42
+  use_learnable_weight: false
+
+data_augmentation:
+  use_weighted_sampler: false

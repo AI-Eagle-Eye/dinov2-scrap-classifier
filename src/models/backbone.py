@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 
@@ -9,7 +11,8 @@ BACKBONE_REGISTRY: dict[str, dict[str, int]] = {
     "eva02_base_patch14_448":  {"embed_dim": 768, "patch_size": 14, "num_heads": 12},
 }
 
-_HUB_SOURCE = "facebookresearch/dinov2"
+_HUB_REMOTE = "facebookresearch/dinov2"
+_HUB_LOCAL = str(Path(torch.hub.get_dir()) / "facebookresearch_dinov2_main")
 _EVA02_NAMES: frozenset[str] = frozenset({"eva02_base_patch14_448"})
 
 
@@ -26,7 +29,11 @@ class DINOv2Backbone(nn.Module):
         self.patch_size: int = cfg["patch_size"]
         self.num_heads: int = cfg["num_heads"]
 
-        self._dino = torch.hub.load(_HUB_SOURCE, model_name)
+        # 로컬 캐시 우선; 없으면 GitHub에서 다운로드
+        hub_src, hub_source_kw = (
+            (_HUB_LOCAL, "local") if Path(_HUB_LOCAL).exists() else (_HUB_REMOTE, "github")
+        )
+        self._dino = torch.hub.load(hub_src, model_name, source=hub_source_kw)
         self._freeze()
 
     def _freeze(self) -> None:

@@ -48,7 +48,9 @@ def build_model(cfg: dict[str, Any], ckpt_path: Path, device: torch.device) -> H
         class_aware_init_weights=m.get("class_aware_init_weights", None),
     )
     model = HazardModel(model_cfg)
-    state = torch.load(ckpt_path, map_location=device, weights_only=True)
+    raw = torch.load(ckpt_path, map_location=device, weights_only=False)
+    # 전체 학습 체크포인트(trainer.py 저장 포맷) vs plain state_dict 모두 지원
+    state = raw["model_state_dict"] if isinstance(raw, dict) and "model_state_dict" in raw else raw
     model.load_state_dict(state)
     model.to(device).eval()
     return model

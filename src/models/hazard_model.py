@@ -31,6 +31,7 @@ class ModelConfig:
     num_classes: int = _NUM_CLASSES
     use_grad_checkpoint: bool = True
     class_aware_init_weights: list[float] | None = None
+    backbone_frozen: bool = True
 
     @property
     def embed_dim(self) -> int:
@@ -65,7 +66,9 @@ class HazardModel(nn.Module):
         super().__init__()
         self.config = config
 
-        self.backbone: DINOv2Backbone | EVA02Backbone = build_backbone(config.backbone_name)
+        self.backbone: DINOv2Backbone | EVA02Backbone = build_backbone(
+            config.backbone_name, frozen=config.backbone_frozen
+        )
 
         self.vpt: VPTBackbone | None = None
         if config.vpt.enabled:

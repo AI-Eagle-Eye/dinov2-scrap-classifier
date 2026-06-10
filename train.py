@@ -46,8 +46,10 @@ def _load_config(path: Path) -> dict[str, Any]:
 def _build_model_config(cfg: dict[str, Any]) -> ModelConfig:
     m = cfg["model"]
     vpt_raw = m.get("vpt", {})
+    backbone_raw = m.get("backbone", {})
     return ModelConfig(
         backbone_name=m.get("backbone_name", "dinov2_vitb14"),
+        backbone_frozen=backbone_raw.get("frozen", True),
         head_type=m.get("head_type", "mlp"),
         vpt=VPTConfig(
             enabled=vpt_raw.get("enabled", False),

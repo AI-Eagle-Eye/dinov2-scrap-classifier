@@ -90,6 +90,34 @@ def _backbone_llrd_groups(
     return groups
 
 
+def _is_no_weight_decay(name: str) -> bool:
+    return (
+        "bias" in name
+        or "norm" in name
+        or "LayerScale" in name
+        or "pos_embed" in name
+        or "patch_embed" in name
+        or "cls_token" in name
+    )
+
+
+def _split_wd_groups(
+    groups: list[dict[str, Any]],
+    id_to_name: dict[int, str],
+) -> list[dict[str, Any]]:
+    """Split each param group into a no-WD sub-group and a WD sub-group."""
+    result: list[dict[str, Any]] = []
+    for g in groups:
+        no_wd = [p for p in g["params"] if _is_no_weight_decay(id_to_name.get(id(p), ""))]
+        wd = [p for p in g["params"] if not _is_no_weight_decay(id_to_name.get(id(p), ""))]
+        lr = g["lr"]
+        if no_wd:
+            result.append({"params": no_wd, "lr": lr, "weight_decay": 0.0})
+        if wd:
+            result.append({"params": wd, "lr": lr})
+    return result
+
+
 def _build_optimizer(
     model: nn.Module,
     backbone_lr: float,
@@ -97,11 +125,13 @@ def _build_optimizer(
     weight_decay: float,
     llrd_decay: float = 1.0,
     learnable_weight: LearnableClassWeight | None = None,
+    wd_exclude: bool = False,
 ) -> tuple[Lion, bool, int]:
     """backbone/head 분리 파라미터 그룹으로 Lion 옵티마이저 생성.
 
     backbone_lr=0이면 backbone을 frozen(requires_grad=False)하고 optimizer에서 제외.
     llrd_decay<1.0이면 블록별 lr 감쇠 적용.
+    wd_exclude=True이면 norm/bias/embed 파라미터의 weight_decay를 0으로 설정.
     Returns (optimizer, has_backbone_group, head_group_idx).
     """
     backbone: nn.Module | None = getattr(model, "backbone", None)
@@ -117,15 +147,29 @@ def _build_optimizer(
     has_backbone_group = backbone is not None and backbone_lr > 0
 
     if has_backbone_group:
-        if llrd_decay < 1.0:
-            backbone_groups = _backbone_llrd_groups(backbone, backbone_lr, llrd_decay)
-        else:
-            backbone_groups = [{"params": list(backbone.parameters()), "lr": backbone_lr}]
-        head_group_idx = len(backbone_groups)
-        param_groups: list[dict[str, Any]] = backbone_groups + [{"params": head_params, "lr": head_lr}]
+        backbone_groups: list[dict[str, Any]] = (
+            _backbone_llrd_groups(backbone, backbone_lr, llrd_decay)
+            if llrd_decay < 1.0
+            else [{"params": list(backbone.parameters()), "lr": backbone_lr}]
+        )
     else:
-        head_group_idx = 0
-        param_groups = [{"params": head_params, "lr": head_lr}]
+        backbone_groups = []
+
+    if wd_exclude:
+        id_to_name: dict[int, str] = {id(p): n for n, p in model.named_parameters()}
+        expanded_backbone = _split_wd_groups(backbone_groups, id_to_name)
+        head_no_wd = [p for p in head_params if _is_no_weight_decay(id_to_name.get(id(p), ""))]
+        head_wd = [p for p in head_params if not _is_no_weight_decay(id_to_name.get(id(p), ""))]
+        expanded_head: list[dict[str, Any]] = []
+        if head_no_wd:
+            expanded_head.append({"params": head_no_wd, "lr": head_lr, "weight_decay": 0.0})
+        if head_wd:
+            expanded_head.append({"params": head_wd, "lr": head_lr})
+        head_group_idx = len(expanded_backbone)
+        param_groups: list[dict[str, Any]] = expanded_backbone + expanded_head
+    else:
+        head_group_idx = len(backbone_groups)
+        param_groups = backbone_groups + [{"params": head_params, "lr": head_lr}]
 
     if learnable_weight is not None:
         param_groups.append({
@@ -187,6 +231,7 @@ class Trainer:
         best_metric: str = "danger_precision",
         das_constraint: float = 0.15,
         llrd_decay: float = 1.0,
+        wd_exclude: bool = False,
     ) -> None:
         self.model = model
         self.train_loader = train_loader
@@ -224,7 +269,7 @@ class Trainer:
         self.supcon: SupConLoss | None = SupConLoss() if loss_type == "supcon" else None
 
         self.optimizer, self._has_backbone_group, self._head_group_idx = _build_optimizer(
-            model, backbone_lr, lr, weight_decay, llrd_decay, self.learnable_weight
+            model, backbone_lr, lr, weight_decay, llrd_decay, self.learnable_weight, wd_exclude
         )
         self.scheduler = _build_scheduler(self.optimizer, epochs, warmup_ratio, warmup_type)
 

@@ -1,0 +1,46 @@
+experiment:
+  name: exp_ac_fullrecipe
+  description: "Exp Y: LLRD decay=0.75 + cosine warmup / backbone 1e-5 / head 5e-5"
+
+model:
+  backbone_name: dinov2_vitb14
+  head_type: attention
+  vpt:
+    enabled: false
+    num_tokens: 10
+  dropout: 0.1
+  num_classes: 3
+  use_grad_checkpoint: true
+  use_learnable_weight: false
+
+data:
+  image_size: 336
+  batch_size: 32
+  num_workers: 4
+  unk_label: excluded
+  padding_color: mean
+  augmentation:
+    randaugment: true
+    random_erasing: true
+
+training:
+  epochs: 50
+  optimizer: lion
+  backbone_lr: 1.0e-5
+  head_lr: 1.0e-3
+  llrd_decay: 0.75
+  weight_decay: 1.0e-2
+  warmup_ratio: 0.2
+  warmup_type: cosine
+  early_stopping_patience: 8
+  best_metric: val_loss
+  best_mode: min
+  das_constraint: 0.15
+  label_smoothing: 0.1
+  focal_gamma: 2.0
+  seed: 42
+  use_learnable_weight: false
+  wd_exclude: true
+
+data_augmentation:
+  use_weighted_sampler: false

@@ -1,14 +1,17 @@
 experiment:
-  name: exp_y_llrd
-  description: "Exp Y: LLRD decay=0.75 + cosine warmup / backbone 1e-5 / head 5e-5"
+  name: exp_ah_regularize
+  description: "Exp AH: stronger regularization — dropout 0.3 / weight_decay 5e-2 / last 4 blocks unfrozen"
 
 model:
   backbone_name: dinov2_vitb14
   head_type: attention
+  backbone:
+    frozen: true
+    unfreeze_last_n: 4
   vpt:
     enabled: false
     num_tokens: 10
-  dropout: 0.1
+  dropout: 0.3
   num_classes: 3
   use_grad_checkpoint: true
   use_learnable_weight: false
@@ -18,17 +21,18 @@ data:
   batch_size: 32
   num_workers: 4
   unk_label: excluded
+  padding_color: mean
 
 training:
   epochs: 50
   optimizer: lion
   backbone_lr: 1.0e-5
-  head_lr: 5.0e-5
+  head_lr: 1.0e-3
   llrd_decay: 0.75
-  weight_decay: 1.0e-2
-  warmup_ratio: 0.2
+  weight_decay: 5.0e-2
+  warmup_ratio: 0.05
   warmup_type: cosine
-  early_stopping_patience: 8
+  early_stopping_patience: 15
   best_metric: val_loss
   best_mode: min
   das_constraint: 0.15

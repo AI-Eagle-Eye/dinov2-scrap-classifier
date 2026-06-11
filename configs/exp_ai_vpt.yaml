@@ -1,14 +1,18 @@
 experiment:
-  name: exp_u_multipad
-  description: "Exp U: multi-padding augmentation (0pct + 10pct + 25pct crop concat)"
+  name: exp_ai_vpt
+  description: "Exp AI: VPT-Deep (10 tokens, from layer 6) + last 4 blocks unfrozen"
 
 model:
   backbone_name: dinov2_vitb14
   head_type: attention
+  backbone:
+    frozen: true
+    unfreeze_last_n: 4
   vpt:
-    enabled: false
+    enabled: true
     num_tokens: 10
-  dropout: 0.1
+    insert_from_layer: 6
+  dropout: 0.3
   num_classes: 3
   use_grad_checkpoint: true
   use_learnable_weight: false
@@ -18,19 +22,18 @@ data:
   batch_size: 32
   num_workers: 4
   unk_label: excluded
-  padding_variants:
-    - crops_0pct
-    - crops_10pct
-    - crops_25pct
+  padding_color: mean
 
 training:
   epochs: 50
   optimizer: lion
   backbone_lr: 1.0e-5
-  lr: 5.0e-5
-  weight_decay: 1.0e-2
-  warmup_ratio: 0.1
-  early_stopping_patience: 6
+  head_lr: 1.0e-3
+  llrd_decay: 0.75
+  weight_decay: 5.0e-2
+  warmup_ratio: 0.05
+  warmup_type: cosine
+  early_stopping_patience: 15
   best_metric: val_loss
   best_mode: min
   das_constraint: 0.15

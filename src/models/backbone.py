@@ -19,13 +19,19 @@ _EVA02_NAMES: frozenset[str] = frozenset({"eva02_base_patch14_448"})
 class DINOv2Backbone(nn.Module):
     """DINOv2 backbone returning CLS token and patch tokens."""
 
-    def __init__(self, model_name: str = "dinov2_vits14", frozen: bool = True) -> None:
+    def __init__(
+        self,
+        model_name: str = "dinov2_vits14",
+        frozen: bool = True,
+        unfreeze_last_n: int = 0,
+    ) -> None:
         super().__init__()
         if model_name not in BACKBONE_REGISTRY:
             raise ValueError(f"Unknown backbone: {model_name}. Choose from {list(BACKBONE_REGISTRY)}")
         cfg = BACKBONE_REGISTRY[model_name]
         self.model_name = model_name
         self.frozen = frozen
+        self.unfreeze_last_n = unfreeze_last_n
         self.embed_dim: int = cfg["embed_dim"]
         self.patch_size: int = cfg["patch_size"]
         self.num_heads: int = cfg["num_heads"]
@@ -37,16 +43,29 @@ class DINOv2Backbone(nn.Module):
         self._dino = torch.hub.load(hub_src, model_name, source=hub_source_kw)
         if frozen:
             self._freeze()
+            if unfreeze_last_n > 0:
+                self._unfreeze_last_n_blocks(unfreeze_last_n)
 
     def _freeze(self) -> None:
         for param in self._dino.parameters():
             param.requires_grad = False
         self._dino.eval()
 
+    def _unfreeze_last_n_blocks(self, n: int) -> None:
+        for blk in self._dino.blocks[-n:]:
+            for param in blk.parameters():
+                param.requires_grad = True
+        for param in self._dino.norm.parameters():
+            param.requires_grad = True
+
     def train(self, mode: bool = True) -> DINOv2Backbone:
         super().train(mode)
         if self.frozen:
             self._dino.eval()  # frozen backbone은 학습 중에도 eval 유지
+            if self.unfreeze_last_n > 0 and mode:
+                for blk in self._dino.blocks[-self.unfreeze_last_n:]:
+                    blk.train(True)
+                self._dino.norm.train(True)
         return self
 
     @property
@@ -61,16 +80,28 @@ class DINOv2Backbone(nn.Module):
             cls_token: [B, embed_dim]
             patch_tokens: [B, N, embed_dim]  N = (H / patch_size)^2
         """
-        # torch.no_grad(): inference_mode와 동등하게 grad를 차단하지만
-        # ONNX dynamo exporter 및 torch.export.export와 호환된다.
-        if self.frozen:
-            with torch.no_grad():
+        if not self.frozen or self.unfreeze_last_n == 0:
+            # torch.no_grad(): inference_mode와 동등하게 grad를 차단하지만
+            # ONNX dynamo exporter 및 torch.export.export와 호환된다.
+            if self.frozen:
+                with torch.no_grad():
+                    features = self._dino.forward_features(x)
+            else:
                 features = self._dino.forward_features(x)
-        else:
-            features = self._dino.forward_features(x)
-        cls_token: torch.Tensor = features["x_norm_clstoken"]
-        patch_tokens: torch.Tensor = features["x_norm_patchtokens"]
-        return cls_token, patch_tokens
+            cls_token: torch.Tensor = features["x_norm_clstoken"]
+            patch_tokens: torch.Tensor = features["x_norm_patchtokens"]
+            return cls_token, patch_tokens
+
+        # Partial fine-tuning: frozen 블록은 no_grad, unfrozen 블록은 grad 흐름
+        n_frozen = len(self._dino.blocks) - self.unfreeze_last_n
+        with torch.no_grad():
+            h = self._dino.prepare_tokens_with_masks(x)
+            for blk in self._dino.blocks[:n_frozen]:
+                h = blk(h)
+        for blk in self._dino.blocks[n_frozen:]:
+            h = blk(h)
+        h_norm: torch.Tensor = self._dino.norm(h)
+        return h_norm[:, 0], h_norm[:, 1:]
 
 
 class EVA02Backbone(nn.Module):
@@ -124,8 +155,12 @@ class EVA02Backbone(nn.Module):
         return tokens[:, 0], tokens[:, 1:]
 
 
-def build_backbone(model_name: str, frozen: bool = True) -> DINOv2Backbone | EVA02Backbone:
+def build_backbone(
+    model_name: str,
+    frozen: bool = True,
+    unfreeze_last_n: int = 0,
+) -> DINOv2Backbone | EVA02Backbone:
     """Backbone 팩토리: eva02_* → EVA02Backbone, 나머지 → DINOv2Backbone."""
     if model_name in _EVA02_NAMES:
         return EVA02Backbone(model_name, frozen=frozen)
-    return DINOv2Backbone(model_name, frozen=frozen)
+    return DINOv2Backbone(model_name, frozen=frozen, unfreeze_last_n=unfreeze_last_n)

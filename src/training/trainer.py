@@ -183,22 +183,22 @@ def _build_optimizer(
 
 def _build_scheduler(
     optimizer: Lion,
-    epochs: int,
+    total_steps: int,
     warmup_ratio: float,
     warmup_type: str = "linear",
 ) -> SequentialLR:
-    """Warmup (linear or cosine) + CosineAnnealingLR."""
-    warmup_epochs = max(1, int(epochs * warmup_ratio))
-    cosine_epochs = max(1, epochs - warmup_epochs)
+    """Step 단위 warmup (linear or cosine) + CosineAnnealingLR."""
+    warmup_steps = max(1, int(total_steps * warmup_ratio))
+    cosine_steps = max(1, total_steps - warmup_steps)
     if warmup_type == "cosine":
         def _cosine_fn(step: int) -> float:
-            progress = (step + 1) / warmup_epochs
+            progress = (step + 1) / warmup_steps
             return 0.5 * (1.0 - math.cos(math.pi * min(progress, 1.0)))
         warmup: LinearLR | LambdaLR = LambdaLR(optimizer, lr_lambda=_cosine_fn)
     else:
-        warmup = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
-    cosine = CosineAnnealingLR(optimizer, T_max=cosine_epochs, eta_min=1e-7)
-    return SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+        warmup = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_steps)
+    cosine = CosineAnnealingLR(optimizer, T_max=cosine_steps, eta_min=1e-7)
+    return SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps])
 
 
 class Trainer:
@@ -271,7 +271,8 @@ class Trainer:
         self.optimizer, self._has_backbone_group, self._head_group_idx = _build_optimizer(
             model, backbone_lr, lr, weight_decay, llrd_decay, self.learnable_weight, wd_exclude
         )
-        self.scheduler = _build_scheduler(self.optimizer, epochs, warmup_ratio, warmup_type)
+        total_steps = epochs * len(train_loader)
+        self.scheduler = _build_scheduler(self.optimizer, total_steps, warmup_ratio, warmup_type)
 
         self._best_metric = best_metric
         self._das_constraint = das_constraint
@@ -331,6 +332,7 @@ class Trainer:
             loss.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
+            self.scheduler.step()
 
             total_loss += loss.item()
             all_preds.extend(logits.detach().argmax(1).cpu().tolist())
@@ -499,7 +501,6 @@ class Trainer:
             train_m = self._train_epoch()
             val_m = self._validate()
             last_val_metrics = val_m
-            self.scheduler.step()
             self._log_epoch(epoch, train_m, val_m)
 
             ckpt_metrics = {
@@ -527,7 +528,8 @@ class Trainer:
                     class_w_str = f" | class_w: [{cw[0]:.2f}, {cw[1]:.2f}, {cw[2]:.2f}]"
                 print(
                     f"[Epoch {epoch}]"
-                    f" loss: {val_m['loss']:.4f}"
+                    f" loss: {train_m['loss']:.4f}"
+                    f" | val_loss: {val_m['loss']:.4f}"
                     f" | acc: {val_m['accuracy']:.4f}"
                     f" | danger_prec: {val_m['precision_danger'] * 100:.2f}%"
                     f" | danger_as_safe: {das * 100:.2f}% {das_flag}"

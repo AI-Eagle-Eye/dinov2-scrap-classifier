@@ -50,6 +50,7 @@ def _build_model_config(cfg: dict[str, Any]) -> ModelConfig:
     return ModelConfig(
         backbone_name=m.get("backbone_name", "dinov2_vitb14"),
         backbone_frozen=backbone_raw.get("frozen", True),
+        unfreeze_last_n=backbone_raw.get("unfreeze_last_n", 0),
         head_type=m.get("head_type", "mlp"),
         vpt=VPTConfig(
             enabled=vpt_raw.get("enabled", False),

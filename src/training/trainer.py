@@ -11,8 +11,8 @@ from typing import Any, Literal
 import numpy as np
 import torch
 import torch.nn as nn
-from lion_pytorch import Lion
 from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, LinearLR, SequentialLR
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -25,8 +25,27 @@ from .supcon_loss import SupConLoss
 # BF16이 FP16보다 수치 안정적이고 RTX 4060/4090에서 GradScaler 불필요
 _AMP_DTYPE = torch.bfloat16
 
-# danger_as_safe_rate가 이 값 미만일 때만 best 갱신/early stopping 카운트 진행
-DANGER_AS_SAFE_LIMIT = 0.15
+# verbose 출력용 기준값. best 갱신 제약은 config의 das_constraint 사용
+DANGER_AS_SAFE_DISPLAY_LIMIT = 0.15
+
+# best_metric config 이름 → compute_metrics()/val_m 결과 키 매핑.
+# val_loss만 낮을수록 좋고, 나머지는 높을수록 좋다.
+_BEST_METRIC_KEYS: dict[str, str] = {
+    "val_loss": "loss",
+    "danger_precision": "precision_danger",
+    "f1_macro": "f1_macro",
+    "f2_macro": "f2_macro",
+    "safe_precision": "safe_precision",
+}
+
+
+def _resolve_metric(val_m: dict[str, float], best_metric: str) -> float:
+    """best_metric 이름에 해당하는 val 지표 값을 반환."""
+    if best_metric not in _BEST_METRIC_KEYS:
+        raise ValueError(
+            f"Unsupported best_metric: {best_metric!r}. Choose from {tuple(_BEST_METRIC_KEYS)}"
+        )
+    return val_m[_BEST_METRIC_KEYS[best_metric]]
 
 
 def set_seed(seed: int = 42) -> None:
@@ -126,8 +145,8 @@ def _build_optimizer(
     llrd_decay: float = 1.0,
     learnable_weight: LearnableClassWeight | None = None,
     wd_exclude: bool = False,
-) -> tuple[Lion, bool, int]:
-    """backbone/head 분리 파라미터 그룹으로 Lion 옵티마이저 생성.
+) -> tuple[torch.optim.AdamW, bool, int]:
+    """backbone/head 분리 파라미터 그룹으로 AdamW 옵티마이저 생성.
 
     backbone_lr=0이면 backbone을 frozen(requires_grad=False)하고 optimizer에서 제외.
     llrd_decay<1.0이면 블록별 lr 감쇠 적용.
@@ -178,11 +197,11 @@ def _build_optimizer(
             "weight_decay": 0.0,
         })
 
-    return Lion(param_groups, weight_decay=weight_decay), has_backbone_group, head_group_idx
+    return torch.optim.AdamW(param_groups, weight_decay=weight_decay), has_backbone_group, head_group_idx
 
 
 def _build_scheduler(
-    optimizer: Lion,
+    optimizer: torch.optim.Optimizer,
     total_steps: int,
     warmup_ratio: float,
     warmup_type: str = "linear",
@@ -232,6 +251,8 @@ class Trainer:
         das_constraint: float = 0.15,
         llrd_decay: float = 1.0,
         wd_exclude: bool = False,
+        use_ema: bool = False,
+        ema_decay: float = 0.9995,
     ) -> None:
         self.model = model
         self.train_loader = train_loader
@@ -244,6 +265,10 @@ class Trainer:
         self.seed = seed
         self._focal_gamma = focal_gamma
         self._label_smoothing = label_smoothing
+        self.ema_model: AveragedModel | None = (
+            AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay))
+            if use_ema else None
+        )
 
         self._use_amp: bool = self.device.type == "cuda"
 
@@ -333,6 +358,8 @@ class Trainer:
             nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
             self.scheduler.step()
+            if self.ema_model is not None:
+                self.ema_model.update_parameters(self.model)
 
             total_loss += loss.item()
             all_preds.extend(logits.detach().argmax(1).cpu().tolist())
@@ -344,7 +371,8 @@ class Trainer:
 
     @torch.inference_mode()
     def _validate(self) -> dict[str, float]:
-        self.model.eval()
+        eval_model = self.ema_model if self.ema_model is not None else self.model
+        eval_model.eval()
         total_loss = 0.0
         all_preds: list[int] = []
         all_labels: list[int] = []
@@ -353,7 +381,7 @@ class Trainer:
             images = images.to(self.device)
             labels = labels.to(self.device)
             with torch.autocast(device_type=self.device.type, dtype=_AMP_DTYPE, enabled=self._use_amp):
-                logits = self.model(images)
+                logits = eval_model(images)
                 total_loss += self._call_criterion(logits, labels).item()
             all_preds.extend(logits.argmax(1).cpu().tolist())
             all_labels.extend(labels.cpu().tolist())
@@ -368,18 +396,18 @@ class Trainer:
         if val_m["danger_as_safe_rate"] >= self._das_constraint:
             return False
         acc = val_m["accuracy"]
+        metric_val = _resolve_metric(val_m, self._best_metric)
         if self._best_metric == "val_loss":
-            metric_val = val_m["loss"]
             improved = metric_val < self._best_metric_value
         else:
-            metric_val = val_m["precision_danger"]
             improved = metric_val > self._best_metric_value or (
                 metric_val == self._best_metric_value and acc > self._best_acc
             )
         if improved:
             self._best_metric_value = metric_val
             self._best_acc = acc
-            torch.save(self.model.state_dict(), self._best_model_path)
+            save_model = self.ema_model.module if self.ema_model is not None else self.model
+            torch.save(save_model.state_dict(), self._best_model_path)
         return improved
 
     def _save_plots(self) -> None:
@@ -494,6 +522,8 @@ class Trainer:
         """학습 루프 실행. 최종 best val 지표를 반환."""
         set_seed(self.seed)
         self.model.to(self.device)
+        if self.ema_model is not None:
+            self.ema_model.to(self.device)
         best_val_metrics: dict[str, float] = {}
         last_val_metrics: dict[str, float] = {}
 
@@ -509,8 +539,9 @@ class Trainer:
                 "f1": val_m["f1_macro"],
                 "f2": val_m["f2_macro"],
             }
+            ckpt_save_model = self.ema_model.module if self.ema_model is not None else self.model
             self.ckpt_manager.save(
-                self.model, self.optimizer, self.scheduler,
+                ckpt_save_model, self.optimizer, self.scheduler,
                 epoch, ckpt_metrics, self.config_dict, self.seed,
             )
 
@@ -521,7 +552,7 @@ class Trainer:
             if verbose:
                 _, lr_head = self._get_lrs()
                 das = val_m["danger_as_safe_rate"]
-                das_flag = "✓" if das < DANGER_AS_SAFE_LIMIT else "✗"
+                das_flag = "✓" if das < DANGER_AS_SAFE_DISPLAY_LIMIT else "✗"
                 class_w_str = ""
                 if self.learnable_weight is not None:
                     cw = self.learnable_weight.get_weights().detach().cpu().tolist()
@@ -537,7 +568,7 @@ class Trainer:
                     f"{class_w_str}"
                 )
 
-            es_value = val_m["loss"] if self._best_metric == "val_loss" else val_m["precision_danger"]
+            es_value = _resolve_metric(val_m, self._best_metric)
             if self.early_stopping.update(es_value):
                 if verbose:
                     print(f"[train] Early stop at epoch {epoch} (patience={self.early_stopping.patience})")

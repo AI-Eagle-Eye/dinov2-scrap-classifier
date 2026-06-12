@@ -1,6 +1,6 @@
 experiment:
-  name: exp_ai_vpt
-  description: "Exp AI: VPT-Deep (10 tokens, from layer 6) + last 4 blocks unfrozen"
+  name: exp_ah_custom
+  description: "Exp AH-custom: custom_label로 학습, original_label로 평가"
 
 model:
   backbone_name: dinov2_vitb14
@@ -9,15 +9,18 @@ model:
     frozen: true
     unfreeze_last_n: 4
   vpt:
-    enabled: true
+    enabled: false
     num_tokens: 10
-    insert_from_layer: 6
   dropout: 0.1
   num_classes: 3
   use_grad_checkpoint: true
   use_learnable_weight: false
 
 data:
+  csv_path: dataset/label_with_split_full.csv
+  label_col: custom_label
+  split_col: split
+  eval_label_col: original_label
   image_size: 336
   batch_size: 32
   num_workers: 4

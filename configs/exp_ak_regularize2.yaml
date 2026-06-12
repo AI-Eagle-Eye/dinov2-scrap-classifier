@@ -1,14 +1,17 @@
 experiment:
-  name: exp_v_bicubic
-  description: "Exp T: val_loss 기준 early stopping + das_constraint 0.15 (learnable_weight 제거)"
+  name: exp_ak_regularize2
+  description: "Exp AK: dropout 0.2 / unfreeze_last_n 2 / backbone_lr 5e-6 / head_lr 5e-4 / wd 1e-1"
 
 model:
   backbone_name: dinov2_vitb14
   head_type: attention
+  backbone:
+    frozen: true
+    unfreeze_last_n: 2
   vpt:
     enabled: false
     num_tokens: 10
-  dropout: 0.1
+  dropout: 0.2
   num_classes: 3
   use_grad_checkpoint: true
   use_learnable_weight: false
@@ -18,15 +21,18 @@ data:
   batch_size: 32
   num_workers: 4
   unk_label: excluded
+  padding_color: mean
 
 training:
   epochs: 50
-  optimizer: lion
-  backbone_lr: 1.0e-5
-  lr: 5.0e-5
-  weight_decay: 1.0e-2
+  optimizer: adamw
+  backbone_lr: 5.0e-6
+  head_lr: 5.0e-4
+  llrd_decay: 0.75
+  weight_decay: 1.0e-1
   warmup_ratio: 0.1
-  early_stopping_patience: 6
+  warmup_type: linear
+  early_stopping_patience: 15
   best_metric: val_loss
   best_mode: min
   das_constraint: 0.15

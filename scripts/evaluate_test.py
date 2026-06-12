@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import torch
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
 
@@ -29,6 +31,7 @@ from scripts._eval_common import (
 from src.data.dataset import HazardDataset
 from src.data.transforms import get_val_transforms
 from src.evaluation.evaluator import compute_metrics
+from src.models.hazard_model import HazardModel
 
 _CLASS_NAMES: list[str] = ["cut", "danger", "excluded"]
 _GAP_WARN: float = 0.05  # val vs test 절대 차이 > 5%p 이면 경고
@@ -42,7 +45,28 @@ def _parse_args() -> argparse.Namespace:
                    help="Danger probability threshold applied to both val and test (default: 0.30)")
     p.add_argument("--device", default="auto", help="cuda / cpu / auto")
     p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--tta", action="store_true",
+                   help="Test-time augmentation: 원본 + hflip softmax 평균 (default: False)")
     return p.parse_args()
+
+
+@torch.inference_mode()
+def collect_probs_tta(
+    model: HazardModel,
+    loader: DataLoader,
+    device: torch.device,
+) -> tuple[np.ndarray, np.ndarray]:
+    """원본과 좌우 반전 추론의 softmax 확률을 평균 → (probs [N, 3], labels [N])."""
+    all_probs: list[np.ndarray] = []
+    all_labels: list[int] = []
+    for images, labels in loader:
+        images = images.to(device)
+        prob_orig = torch.softmax(model(images), dim=1)
+        prob_flip = torch.softmax(model(torch.flip(images, dims=[3])), dim=1)
+        probs = (prob_orig + prob_flip) / 2
+        all_probs.append(probs.cpu().numpy())
+        all_labels.extend(labels.tolist())
+    return np.concatenate(all_probs, axis=0), np.array(all_labels, dtype=int)
 
 
 def _print_metrics(metrics: dict[str, float], split: str) -> None:
@@ -110,6 +134,16 @@ def main() -> None:
     image_size: int = d.get("image_size", 336)
     num_workers: int = d.get("num_workers", 4)
     unk_label: str = d.get("unk_label", "excluded")
+    padding_color: str = d.get("padding_color", "black")
+    eval_label_col: str = d.get("eval_label_col", d.get("label_col", "confirmed_label"))
+    split_col: str = d.get("split_col", "split")
+    ds_kwargs: dict[str, Any] = {
+        "unk_label": unk_label,
+        "label_col": eval_label_col,
+        "split_col": split_col,
+    }
+    if "csv_path" in d:
+        ds_kwargs["csv_path"] = Path(d["csv_path"])
 
     print("=" * 68)
     print("  evaluate_test.py")
@@ -117,10 +151,13 @@ def main() -> None:
     print(f"  Checkpoint : {args.checkpoint}")
     print(f"  Threshold  : {args.threshold}")
     print(f"  Device     : {device}")
+    print(f"  TTA        : {args.tta}")
     print("=" * 68)
 
     print("\n[eval] Building model …")
     model = build_model(cfg, args.checkpoint, device)
+
+    infer = collect_probs_tta if args.tta else collect_probs
 
     loader_kwargs: dict[str, Any] = {
         "batch_size": args.batch_size,
@@ -130,18 +167,18 @@ def main() -> None:
     }
 
     # --- val 추론 (비교 기준) ---
-    val_ds = HazardDataset("val", transform=get_val_transforms(image_size), unk_label=unk_label)
+    val_ds = HazardDataset("val", transform=get_val_transforms(image_size, padding_color), **ds_kwargs)
     val_loader: DataLoader = DataLoader(val_ds, **loader_kwargs)
     print(f"[eval] Val  samples : {len(val_ds)}")
-    val_probs, val_labels = collect_probs(model, val_loader, device)
+    val_probs, val_labels = infer(model, val_loader, device)
     val_preds = apply_threshold(val_probs, args.threshold)
     val_metrics = compute_metrics(val_labels.tolist(), val_preds)
 
     # --- test 추론 (최종 평가) ---
-    test_ds = HazardDataset("test", transform=get_val_transforms(image_size), unk_label=unk_label)
+    test_ds = HazardDataset("test", transform=get_val_transforms(image_size, padding_color), **ds_kwargs)
     test_loader: DataLoader = DataLoader(test_ds, **loader_kwargs)
     print(f"[eval] Test samples : {len(test_ds)}")
-    test_probs, test_labels = collect_probs(model, test_loader, device)
+    test_probs, test_labels = infer(model, test_loader, device)
     test_preds = apply_threshold(test_probs, args.threshold)
     test_metrics = compute_metrics(test_labels.tolist(), test_preds)
 

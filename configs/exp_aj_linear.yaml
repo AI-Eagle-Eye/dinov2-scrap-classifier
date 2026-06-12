@@ -1,17 +1,16 @@
 experiment:
-  name: exp_ai_vpt
-  description: "Exp AI: VPT-Deep (10 tokens, from layer 6) + last 4 blocks unfrozen"
+  name: exp_aj_linear
+  description: "Exp AJ: pure linear probe (CLS → 3), last 4 blocks unfrozen"
 
 model:
   backbone_name: dinov2_vitb14
-  head_type: attention
+  head_type: linear
   backbone:
     frozen: true
     unfreeze_last_n: 4
   vpt:
-    enabled: true
+    enabled: false
     num_tokens: 10
-    insert_from_layer: 6
   dropout: 0.1
   num_classes: 3
   use_grad_checkpoint: true

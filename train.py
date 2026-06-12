@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import yaml
 from torch.utils.data import ConcatDataset, DataLoader
 
+from scripts._eval_common import detect_device, load_config
 from src.data.dataset import HazardDataset, compute_class_weights
 from src.data.transforms import get_train_transforms, get_val_transforms
 from src.models.hazard_model import HazardModel, ModelConfig, VPTConfig
@@ -34,13 +34,6 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--resume", type=Path, default=None, help="Checkpoint path to resume from")
     p.add_argument("--epochs", type=int, default=None, help="Override training.epochs in config")
     return p.parse_args()
-
-
-def _load_config(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        sys.exit(f"[ERROR] config not found: {path}")
-    with path.open(encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def _build_model_config(cfg: dict[str, Any]) -> ModelConfig:
@@ -61,13 +54,8 @@ def _build_model_config(cfg: dict[str, Any]) -> ModelConfig:
         num_classes=m.get("num_classes", 3),
         use_grad_checkpoint=m.get("use_grad_checkpoint", True),
         class_aware_init_weights=m.get("class_aware_init_weights", None),
+        head_use_cls=m.get("head_use_cls", False),
     )
-
-
-def _detect_device(device_arg: str) -> torch.device:
-    if device_arg == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(device_arg)
 
 
 def _build_dataloaders(cfg: dict[str, Any]) -> tuple[DataLoader, DataLoader, torch.Tensor]:
@@ -77,12 +65,16 @@ def _build_dataloaders(cfg: dict[str, Any]) -> tuple[DataLoader, DataLoader, tor
     num_workers: int = d.get("num_workers", 4)
     unk_label: str = d.get("unk_label", "excluded")
     label_col: str = d.get("label_col", "confirmed_label")
+    eval_label_col: str = d.get("eval_label_col", label_col)
     split_col: str = d.get("split_col", "split")
     ds_kwargs: dict[str, Any] = {"unk_label": unk_label, "label_col": label_col, "split_col": split_col}
+    eval_ds_kwargs: dict[str, Any] = {**ds_kwargs, "label_col": eval_label_col}
     if "csv_path" in d:
         ds_kwargs["csv_path"] = Path(d["csv_path"])
+        eval_ds_kwargs["csv_path"] = Path(d["csv_path"])
 
     aug_cfg: dict[str, Any] | None = cfg.get("data_augmentation") or None
+    padding_color: str = d.get("padding_color", "black")
     padding_variants: list[str] | None = d.get("padding_variants")
 
     if padding_variants:
@@ -90,7 +82,7 @@ def _build_dataloaders(cfg: dict[str, Any]) -> tuple[DataLoader, DataLoader, tor
         per_variant: list[HazardDataset] = [
             HazardDataset(
                 "train",
-                transform=get_train_transforms(image_size, aug_cfg),
+                transform=get_train_transforms(image_size, aug_cfg, padding_color),
                 img_root=img_base / variant,
                 **ds_kwargs,
             )
@@ -101,12 +93,14 @@ def _build_dataloaders(cfg: dict[str, Any]) -> tuple[DataLoader, DataLoader, tor
         weights_ds = per_variant[0]
     else:
         train_ds = HazardDataset(
-            "train", transform=get_train_transforms(image_size, aug_cfg), **ds_kwargs
+            "train", transform=get_train_transforms(image_size, aug_cfg, padding_color), **ds_kwargs
         )
         weights_ds = train_ds
 
     # val/test는 crops_25pct 단일 기준 유지 (평가 일관성)
-    val_ds = HazardDataset("val", transform=get_val_transforms(image_size), **ds_kwargs)
+    val_ds = HazardDataset(
+        "val", transform=get_val_transforms(image_size, padding_color), **eval_ds_kwargs
+    )
 
     if len(train_ds) == 0:
         sys.exit("[ERROR] train split이 비어 있습니다. CSV 경로와 split 컬럼을 확인하세요.")
@@ -147,7 +141,7 @@ def _maybe_resume(args: argparse.Namespace, model: HazardModel, trainer: Trainer
 
 def main() -> None:
     args = _parse_args()
-    cfg = _load_config(args.config)
+    cfg = load_config(args.config)
 
     if args.epochs is not None:
         cfg["training"]["epochs"] = args.epochs
@@ -162,7 +156,7 @@ def main() -> None:
     seed: int = t_cfg.get("seed", 42)
     set_seed(seed)
 
-    device = _detect_device(args.device)
+    device = detect_device(args.device)
     device_label = (
         f"cuda ({torch.cuda.get_device_name(0)})" if device.type == "cuda" else "cpu"
     )
@@ -211,6 +205,9 @@ def main() -> None:
         best_metric=t_cfg.get("best_metric", "danger_precision"),
         das_constraint=t_cfg.get("das_constraint", 0.15),
         llrd_decay=t_cfg.get("llrd_decay", 1.0),
+        wd_exclude=t_cfg.get("wd_exclude", False),
+        use_ema=t_cfg.get("use_ema", False),
+        ema_decay=t_cfg.get("ema_decay", 0.9995),
     )
 
     _maybe_resume(args, model, trainer)

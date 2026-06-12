@@ -79,8 +79,8 @@ class CheckpointManager:
 
     def _cleanup_old(self, prefix: str) -> None:
         """동일 metric의 이전 체크포인트를 제거해 디스크 낭비를 방지."""
-        old_files = sorted(self.save_dir.glob(f"{prefix}*.ckpt"))[:-1]
-        for f in old_files:
+        files = sorted(self.save_dir.glob(f"{prefix}*.ckpt"), key=lambda p: p.stat().st_mtime)
+        for f in files[:-1]:
             f.unlink(missing_ok=True)
 
     @staticmethod

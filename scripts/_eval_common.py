@@ -34,8 +34,11 @@ def load_config(path: Path) -> dict[str, Any]:
 def build_model(cfg: dict[str, Any], ckpt_path: Path, device: torch.device) -> HazardModel:
     m = cfg["model"]
     vpt_raw = m.get("vpt", {})
+    backbone_raw = m.get("backbone", {})
     model_cfg = ModelConfig(
         backbone_name=m.get("backbone_name", "dinov2_vitb14"),
+        backbone_frozen=backbone_raw.get("frozen", True),
+        unfreeze_last_n=backbone_raw.get("unfreeze_last_n", 0),
         head_type=m.get("head_type", "mlp"),
         vpt=VPTConfig(
             enabled=vpt_raw.get("enabled", False),
@@ -46,6 +49,7 @@ def build_model(cfg: dict[str, Any], ckpt_path: Path, device: torch.device) -> H
         num_classes=m.get("num_classes", 3),
         use_grad_checkpoint=m.get("use_grad_checkpoint", True),
         class_aware_init_weights=m.get("class_aware_init_weights", None),
+        head_use_cls=m.get("head_use_cls", False),
     )
     model = HazardModel(model_cfg)
     raw = torch.load(ckpt_path, map_location=device, weights_only=False)

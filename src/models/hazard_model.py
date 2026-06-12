@@ -7,12 +7,12 @@ import torch
 import torch.nn as nn
 
 from .backbone import BACKBONE_REGISTRY, DINOv2Backbone, EVA02Backbone, build_backbone
-from .head import AttentionHead, ClassAwareHead, MLPHead
+from .head import AttentionHead, ClassAwareHead, LinearHead, MLPHead
 from .vpt import VPTBackbone
 
 _NUM_CLASSES = 3
 
-HeadType = Literal["mlp", "attention", "class_aware"]
+HeadType = Literal["mlp", "attention", "class_aware", "linear"]
 
 
 @dataclass(slots=True)
@@ -33,6 +33,7 @@ class ModelConfig:
     class_aware_init_weights: list[float] | None = None
     backbone_frozen: bool = True
     unfreeze_last_n: int = 0
+    head_use_cls: bool = False
 
     @property
     def embed_dim(self) -> int:
@@ -45,11 +46,12 @@ def _build_head(
     num_classes: int,
     dropout: float,
     class_aware_init_weights: list[float] | None = None,
+    head_use_cls: bool = False,
 ) -> nn.Module:
     if head_type == "mlp":
         return MLPHead(embed_dim, num_classes=num_classes, dropout=dropout)
     if head_type == "attention":
-        return AttentionHead(embed_dim, num_classes=num_classes, dropout=dropout)
+        return AttentionHead(embed_dim, num_classes=num_classes, dropout=dropout, use_cls=head_use_cls)
     if head_type == "class_aware":
         return ClassAwareHead(
             embed_dim,
@@ -57,7 +59,9 @@ def _build_head(
             dropout=dropout,
             init_weights=class_aware_init_weights,
         )
-    raise ValueError(f"Unknown head_type: {head_type!r}. Choose from ('mlp', 'attention', 'class_aware')")
+    if head_type == "linear":
+        return LinearHead(embed_dim, num_classes=num_classes)
+    raise ValueError(f"Unknown head_type: {head_type!r}. Choose from ('mlp', 'attention', 'class_aware', 'linear')")
 
 
 class HazardModel(nn.Module):
@@ -87,6 +91,7 @@ class HazardModel(nn.Module):
             config.num_classes,
             config.dropout,
             config.class_aware_init_weights,
+            config.head_use_cls,
         )
 
     def _extract_features(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

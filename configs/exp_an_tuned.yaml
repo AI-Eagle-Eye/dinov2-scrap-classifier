@@ -1,22 +1,26 @@
 experiment:
-  name: exp_ah_regularize
-  description: "Exp AH: stronger regularization — dropout 0.3 / weight_decay 5e-2 / last 4 blocks unfrozen"
+  name: exp_an_tuned
+  description: "Exp AN: tuned from exp_am_cls_att — dropout 0.3 / unfreeze_last_n 3 / lr·llrd tuned / f1_macro best"
 
 model:
   backbone_name: dinov2_vitb14
   head_type: attention
+  head_use_cls: true
   backbone:
     frozen: true
-    unfreeze_last_n: 4
+    unfreeze_last_n: 3
   vpt:
     enabled: false
     num_tokens: 10
-  dropout: 0.1
+  dropout: 0.3
   num_classes: 3
   use_grad_checkpoint: true
   use_learnable_weight: false
 
 data:
+  csv_path: dataset/label_with_split_full.csv
+  label_col: v2_label
+  split_col: split_v2
   image_size: 336
   batch_size: 32
   num_workers: 4
@@ -26,20 +30,22 @@ data:
 training:
   epochs: 50
   optimizer: adamw
-  backbone_lr: 1.0e-5
-  head_lr: 1.0e-3
-  llrd_decay: 0.75
-  weight_decay: 5.0e-2
-  warmup_ratio: 0.15
+  backbone_lr: 5.0e-6
+  head_lr: 7.5e-4
+  llrd_decay: 0.65
+  weight_decay: 1.0e-1
+  warmup_ratio: 0.1
   warmup_type: linear
-  early_stopping_patience: 15
-  best_metric: val_loss
-  best_mode: min
+  early_stopping_patience: 12
+  best_metric: f1_macro
+  best_mode: max
   das_constraint: 0.15
   label_smoothing: 0.1
-  focal_gamma: 2.0
+  focal_gamma: 1.5
   seed: 42
   use_learnable_weight: false
+  use_ema: true
+  ema_decay: 0.999
 
 data_augmentation:
   use_weighted_sampler: false

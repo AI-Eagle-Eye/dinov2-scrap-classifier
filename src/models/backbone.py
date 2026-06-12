@@ -111,7 +111,12 @@ class EVA02Backbone(nn.Module):
     forward_features → [B, N+1, D] where index 0 = CLS, 1: = patch tokens.
     """
 
-    def __init__(self, model_name: str = "eva02_base_patch14_448", frozen: bool = True) -> None:
+    def __init__(
+        self,
+        model_name: str = "eva02_base_patch14_448",
+        frozen: bool = True,
+        unfreeze_last_n: int = 0,
+    ) -> None:
         super().__init__()
         if model_name not in BACKBONE_REGISTRY:
             raise ValueError(f"Unknown backbone: {model_name}. Choose from {list(BACKBONE_REGISTRY)}")
@@ -119,22 +124,36 @@ class EVA02Backbone(nn.Module):
         cfg = BACKBONE_REGISTRY[model_name]
         self.model_name = model_name
         self.frozen = frozen
+        self.unfreeze_last_n = unfreeze_last_n
         self.embed_dim: int = cfg["embed_dim"]
         self.patch_size: int = cfg["patch_size"]
         self.num_heads: int = cfg["num_heads"]
         self._model = timm.create_model(model_name, pretrained=True, num_classes=0)
         if frozen:
             self._freeze()
+            if unfreeze_last_n > 0:
+                self._unfreeze_last_n_blocks(unfreeze_last_n)
 
     def _freeze(self) -> None:
         for param in self._model.parameters():
             param.requires_grad = False
         self._model.eval()
 
+    def _unfreeze_last_n_blocks(self, n: int) -> None:
+        for blk in self._model.blocks[-n:]:
+            for param in blk.parameters():
+                param.requires_grad = True
+        for param in self._model.norm.parameters():
+            param.requires_grad = True
+
     def train(self, mode: bool = True) -> EVA02Backbone:
         super().train(mode)
         if self.frozen:
             self._model.eval()  # frozen backbone은 학습 중에도 eval 유지
+            if self.unfreeze_last_n > 0 and mode:
+                for blk in self._model.blocks[-self.unfreeze_last_n:]:
+                    blk.train(True)
+                self._model.norm.train(True)
         return self
 
     @property
@@ -147,7 +166,9 @@ class EVA02Backbone(nn.Module):
             cls_token:    [B, embed_dim]
             patch_tokens: [B, N, embed_dim]  N = (H / patch_size)^2
         """
-        if self.frozen:
+        # unfreeze_last_n>0이면 grad가 흐르도록 no_grad를 걸지 않는다
+        # (frozen 블록은 requires_grad=False라 grad 계산에서 자동 제외)
+        if self.frozen and self.unfreeze_last_n == 0:
             with torch.no_grad():
                 tokens = self._model.forward_features(x)  # [B, N+1, D]
         else:
@@ -162,5 +183,5 @@ def build_backbone(
 ) -> DINOv2Backbone | EVA02Backbone:
     """Backbone 팩토리: eva02_* → EVA02Backbone, 나머지 → DINOv2Backbone."""
     if model_name in _EVA02_NAMES:
-        return EVA02Backbone(model_name, frozen=frozen)
+        return EVA02Backbone(model_name, frozen=frozen, unfreeze_last_n=unfreeze_last_n)
     return DINOv2Backbone(model_name, frozen=frozen, unfreeze_last_n=unfreeze_last_n)

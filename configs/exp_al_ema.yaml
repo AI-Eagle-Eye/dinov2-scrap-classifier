@@ -1,6 +1,6 @@
 experiment:
-  name: exp_ai_vpt
-  description: "Exp AI: VPT-Deep (10 tokens, from layer 6) + last 4 blocks unfrozen"
+  name: exp_al_ema
+  description: "Exp AL: EMA (decay=0.999) + dropout 0.2 / unfreeze_last_n 4 / v2_label"
 
 model:
   backbone_name: dinov2_vitb14
@@ -9,15 +9,17 @@ model:
     frozen: true
     unfreeze_last_n: 4
   vpt:
-    enabled: true
+    enabled: false
     num_tokens: 10
-    insert_from_layer: 6
-  dropout: 0.1
+  dropout: 0.2
   num_classes: 3
   use_grad_checkpoint: true
   use_learnable_weight: false
 
 data:
+  csv_path: dataset/label_with_split_full.csv
+  label_col: v2_label
+  split_col: split_v2
   image_size: 336
   batch_size: 32
   num_workers: 4
@@ -30,17 +32,18 @@ training:
   backbone_lr: 1.0e-5
   head_lr: 1.0e-3
   llrd_decay: 0.75
-  weight_decay: 5.0e-2
-  warmup_ratio: 0.15
+  weight_decay: 1.0e-1
+  warmup_ratio: 0.1
   warmup_type: linear
   early_stopping_patience: 15
   best_metric: val_loss
   best_mode: min
   das_constraint: 0.15
-  label_smoothing: 0.1
+  label_smoothing: 0.2
   focal_gamma: 2.0
   seed: 42
   use_learnable_weight: false
+  use_ema: true
 
 data_augmentation:
   use_weighted_sampler: false

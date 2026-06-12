@@ -41,7 +41,11 @@ class MLPHead(nn.Module):
 
 
 class AttentionHead(nn.Module):
-    """Patch tokens → MultiHeadAttention (self-attn) → mean pool → Linear."""
+    """Patch tokens → MultiHeadAttention (self-attn) → mean pool → Linear.
+
+    use_cls=True이면 CLS token을 patch token 앞에 prepend하여 self-attention과
+    mean pool 대상에 포함시킨다.
+    """
 
     def __init__(
         self,
@@ -49,23 +53,40 @@ class AttentionHead(nn.Module):
         num_heads: int = _ATT_HEADS,
         num_classes: int = NUM_CLASSES,
         dropout: float = 0.1,
+        use_cls: bool = False,
     ) -> None:
         super().__init__()
+        self.use_cls = use_cls
         self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
         self.norm = nn.LayerNorm(embed_dim)
         self.classifier = nn.Linear(embed_dim, num_classes)
 
-    def forward(self, _cls_token: torch.Tensor, patch_tokens: torch.Tensor) -> torch.Tensor:
+    def forward(self, cls_token: torch.Tensor, patch_tokens: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            _cls_token:   [B, D]  (unused)
+            cls_token:    [B, D]  (use_cls=True일 때만 사용)
             patch_tokens: [B, N, D]
         Returns:
             logits: [B, num_classes]
         """
-        attended, _ = self.attn(patch_tokens, patch_tokens, patch_tokens)
+        if self.use_cls:
+            tokens = torch.cat([cls_token.unsqueeze(1), patch_tokens], dim=1)
+        else:
+            tokens = patch_tokens
+        attended, _ = self.attn(tokens, tokens, tokens)
         pooled = self.norm(attended.mean(dim=1))
         return self.classifier(pooled)
+
+
+class LinearHead(nn.Module):
+    """CLS token → Linear (pure linear probe)."""
+
+    def __init__(self, embed_dim: int, num_classes: int = NUM_CLASSES) -> None:
+        super().__init__()
+        self.fc = nn.Linear(embed_dim, num_classes)
+
+    def forward(self, cls_token: torch.Tensor, _patch_tokens: torch.Tensor) -> torch.Tensor:
+        return self.fc(cls_token)
 
 
 class ClassAwareHead(nn.Module):

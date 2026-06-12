@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from torch.utils.data import DataLoader
@@ -101,7 +102,18 @@ def main() -> None:
 
     d = cfg["data"]
     image_size: int = d.get("image_size", 336)
-    val_ds = HazardDataset("val", transform=get_val_transforms(image_size))
+    padding_color: str = d.get("padding_color", "black")
+    eval_label_col: str = d.get("eval_label_col", d.get("label_col", "confirmed_label"))
+    split_col: str = d.get("split_col", "split")
+    unk_label: str = d.get("unk_label", "excluded")
+    ds_kwargs: dict[str, Any] = {
+        "unk_label": unk_label,
+        "label_col": eval_label_col,
+        "split_col": split_col,
+    }
+    if "csv_path" in d:
+        ds_kwargs["csv_path"] = Path(d["csv_path"])
+    val_ds = HazardDataset("val", transform=get_val_transforms(image_size, padding_color), **ds_kwargs)
     val_loader = DataLoader(
         val_ds,
         batch_size=args.batch_size,

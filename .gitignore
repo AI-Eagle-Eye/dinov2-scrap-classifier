@@ -53,7 +53,7 @@ reports
 
 #EXPERIMENT
 docs
-experiments
+experiments/*/checkpoints
 
 # Claude Code local settings
 .claude/

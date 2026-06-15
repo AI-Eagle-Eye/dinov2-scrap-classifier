@@ -1,0 +1,54 @@
+experiment:
+  name: exp_aq_multipad
+  description: "Exp AP: cls_att base with f1_macro best metric + patience 12"
+
+model:
+  backbone_name: dinov2_vitb14
+  head_type: attention
+  head_use_cls: true
+  backbone:
+    frozen: true
+    unfreeze_last_n: 4
+  vpt:
+    enabled: false
+    num_tokens: 10
+  dropout: 0.2
+  num_classes: 3
+  use_grad_checkpoint: true
+  use_learnable_weight: false
+
+data:
+  csv_path: dataset/label_with_split_full.csv
+  label_col: v2_label
+  split_col: split_v2
+  image_size: 336
+  batch_size: 32
+  num_workers: 4
+  unk_label: excluded
+  padding_color: mean
+  padding_variants:
+    - crops_0pct
+    - crops_10pct
+    - crops_25pct
+
+training:
+  epochs: 50
+  optimizer: adamw
+  backbone_lr: 1.0e-5
+  head_lr: 1.0e-3
+  llrd_decay: 0.75
+  weight_decay: 1.0e-1
+  warmup_ratio: 0.1
+  warmup_type: linear
+  early_stopping_patience: 12
+  best_metric: f1_macro
+  best_mode: max
+  das_constraint: 0.15
+  label_smoothing: 0.2
+  focal_gamma: 2.0
+  seed: 42
+  use_learnable_weight: false
+  use_ema: true
+
+data_augmentation:
+  use_weighted_sampler: false

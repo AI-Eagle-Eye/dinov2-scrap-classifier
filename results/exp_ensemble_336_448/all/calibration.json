@@ -1,0 +1,7 @@
+{
+  "temperature": -0.357056,
+  "ece_before": 0.067336,
+  "ece_after": 0.253772,
+  "n_bins": 15,
+  "temperature_fit_on": "val"
+}

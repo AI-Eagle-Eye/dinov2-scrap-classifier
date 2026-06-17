@@ -7,14 +7,16 @@ data/
 *.tif
 *.tiff
 
-# Smoke / 더미 테스트 산출물만 무시
-# 실제 실험(exp_b_s 등)·평가 결과는 커밋 가능 (바이너리 파일은 아래 확장자 패턴으로 별도 차단)
-experiments/*_smoke/
+# 실험 산출물 — 모델 가중치(*.pth/*.ckpt) 등 대용량 바이너리, 전체 무시
+experiments/
 reports/*_smoke/
 reports/eda_smoke/
 
 # 납품용 ONNX / 중간 산출물 디렉토리 — 대용량 바이너리, 로컬 보관
 exports/
+
+# Colab 학습 패키지 — 기업 데이터(label CSV) 포함, 커밋 금지
+colab_package.zip
 
 # 바이너리 모델 파일 — 크기/보안상 커밋 금지
 *.ckpt
@@ -51,12 +53,32 @@ dataset
 #reports
 reports
 
-# 평가 산출물 — predictions.csv가 image_path를 포함하므로 커밋 금지
-results/
+# 평가 산출물 — results/는 커밋(metrics/summary/comparison CSV).
+# 단 predictions.csv는 image_path(데이터 경로)를 노출하므로 차단
+results/**/predictions.csv
+# 기업 이미지가 포함된 시각화 산출물 — 디렉토리 단위로 명시 차단
+# (defense-in-depth: 위 *.png 전역 규칙이 바뀌어도 기업 이미지가 새지 않도록)
+results/**/attention/
+results/**/gallery/
+# 그 외 결과 PNG(confusion/PR/ROC 등)도 *.png 전역 규칙으로 무시된다.
+# 이미지 콘텐츠 없는 비교 차트만 예외로 허용.
+!results/experiments_comparison.png
+
+# 중간 실험 결과 — 최종/납품 대상(exp_ar_448_tta, exp_ensemble_336_448)만 추적, 나머지는 제외
+results/exp_ab_mean_pad/
+results/exp_ah_orig/
+results/exp_ah_regularize/
+results/exp_aj_linear/
+results/exp_ak_regularize2/
+results/exp_al_ema/
+results/exp_am_cls_att/
+results/exp_an_tuned/
+results/exp_ap_f1best/
+results/exp_aq_multipad/
+results/exp_ar_448/
 
 #EXPERIMENT
 docs
-experiments/*/checkpoints
 
 # Claude Code local settings
 .claude/
@@ -71,3 +93,12 @@ experiments/*/checkpoints
 # Environment variables
 .env
 .env.*
+
+#colab
+*.sh
+*.zip
+
+# 로컬/보조 전용 — 커밋 제외
+notebooks/
+run_eval_all.py
+scripts/pack_for_colab.sh

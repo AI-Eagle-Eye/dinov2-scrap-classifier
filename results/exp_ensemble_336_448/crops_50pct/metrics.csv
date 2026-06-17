@@ -1,0 +1,15 @@
+class,precision,recall,f1,n_support
+cut,0.347826,0.484848,0.405063,33
+danger,0.875969,0.849624,0.862595,266
+excluded,0.318182,0.259259,0.285714,27
+
+metric,value
+Accuracy,0.763804
+Macro F1,0.517791
+Macro F2,0.524478
+Miss Rate (Danger),0.097744
+Coverage (자동판정율),0.932515
+precision_danger_ci_low,0.833317
+precision_danger_ci_high,0.915073
+miss_rate_ci_low,0.066661
+miss_rate_ci_high,0.134059

@@ -1,0 +1,5 @@
+exp_name,eval_target,resolution,checkpoint,accuracy,precision_danger,recall_danger,miss_rate_danger,precision_cut,recall_cut,f1_macro,f2_macro,coverage,n_cut,n_danger,n_excluded,applied_thr
+exp_ar_448,all,448,best_f1_ep014_0.8198.ckpt,0.759714,0.869398,0.850877,0.109023,0.295775,0.424242,0.510705,0.511697,0.943763,99,798,81,0.3
+exp_ar_448,crops_0pct,448,best_f1_ep014_0.8198.ckpt,0.766871,0.856089,0.87218,0.097744,0.275,0.333333,0.499588,0.491078,0.953988,33,266,27,0.3
+exp_ar_448,crops_25pct,448,best_f1_ep014_0.8198.ckpt,0.779141,0.878327,0.868421,0.101504,0.319149,0.454545,0.540146,0.53732,0.95092,33,266,27,0.3
+exp_ar_448,crops_50pct,448,best_f1_ep014_0.8198.ckpt,0.733129,0.874494,0.81203,0.12782,0.290909,0.484848,0.493417,0.505586,0.92638,33,266,27,0.3

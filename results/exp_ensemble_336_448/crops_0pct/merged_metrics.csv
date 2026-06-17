@@ -1,0 +1,7 @@
+metric,before_merge,after_merge
+Accuracy,0.773006,0.843558
+Macro F1,0.510306,0.596955
+Macro F2,0.498138,0.600826
+Miss Rate (Danger),0.097744,0.095563
+Precision (Danger),0.857143,0.920139
+Recall (Danger),0.879699,0.904437

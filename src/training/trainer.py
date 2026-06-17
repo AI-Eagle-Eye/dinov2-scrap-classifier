@@ -4,6 +4,7 @@ import csv
 import math
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -12,7 +13,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, LinearLR, SequentialLR
-from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
+from torch.optim.swa_utils import AveragedModel
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -27,6 +28,31 @@ _AMP_DTYPE = torch.bfloat16
 
 # verbose 출력용 기준값. best 갱신 제약은 config의 das_constraint 사용
 DANGER_AS_SAFE_DISPLAY_LIMIT = 0.15
+
+# EMA warmup base: 초반 step에서 effective decay를 (1+n)/(_EMA_WARMUP_BASE+n)로 제한한다.
+# steady-state(n이 큰 경우)에서는 설정된 ema_decay로 수렴 → 결과 동일.
+_EMA_WARMUP_BASE = 10.0
+
+
+def _ema_warmup_avg_fn(
+    decay: float,
+) -> Callable[[list[torch.Tensor], list[torch.Tensor], torch.Tensor], None]:
+    """get_ema_multi_avg_fn에 step 기반 warmup을 더한 multi_avg_fn.
+
+    EMA가 epoch 1에서 near-init 가중치에 고착되어 validation 지표가 무의미해지는
+    현상을 방지한다(timm ModelEmaV2 방식). decay로 수렴하므로 steady-state는 불변.
+    """
+    @torch.no_grad()
+    def avg_fn(
+        ema_params: list[torch.Tensor],
+        model_params: list[torch.Tensor],
+        num_averaged: torch.Tensor,
+    ) -> None:
+        n = float(num_averaged.item() if isinstance(num_averaged, torch.Tensor) else num_averaged)
+        eff_decay = min(decay, (1.0 + n) / (_EMA_WARMUP_BASE + n))
+        torch._foreach_lerp_(ema_params, model_params, 1.0 - eff_decay)
+
+    return avg_fn
 
 # best_metric config 이름 → compute_metrics()/val_m 결과 키 매핑.
 # val_loss만 낮을수록 좋고, 나머지는 높을수록 좋다.
@@ -266,7 +292,7 @@ class Trainer:
         self._focal_gamma = focal_gamma
         self._label_smoothing = label_smoothing
         self.ema_model: AveragedModel | None = (
-            AveragedModel(model, multi_avg_fn=get_ema_multi_avg_fn(ema_decay))
+            AveragedModel(model, multi_avg_fn=_ema_warmup_avg_fn(ema_decay))
             if use_ema else None
         )
 

@@ -1,0 +1,4 @@
+operating_point,threshold,coverage,precision_danger,miss_rate
+precision_danger>=95%,0.86,0.003067,1.0,0.996241
+precision_danger>=90%,0.7,0.566462,0.902527,0.373434
+miss_rate<=10%,0.2,0.864008,0.863905,0.085213

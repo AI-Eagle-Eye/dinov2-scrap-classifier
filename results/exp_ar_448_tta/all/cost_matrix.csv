@@ -1,0 +1,14 @@
+cost_matrix (true\pred),cut,danger,excluded
+cut,0.0,1.0,0.0
+danger,100.0,0.0,0.0
+excluded,0.0,0.0,0.0
+
+confusion_count (true\pred),cut,danger,excluded
+cut,42,56,1
+danger,87,679,32
+excluded,13,46,22
+
+metric,value
+total_expected_cost,8756.0
+per_image_expected_cost,8.952965
+n_samples,978

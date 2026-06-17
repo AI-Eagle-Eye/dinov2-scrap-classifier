@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 from torch.utils.data import DataLoader
@@ -22,12 +21,14 @@ from scripts._eval_common import (
     apply_threshold,
     build_model,
     collect_probs,
+    dataset_kwargs,
     detect_device,
     load_config,
 )
 from src.data.dataset import HazardDataset
 from src.data.transforms import get_val_transforms
 from src.evaluation.evaluator import compute_metrics
+from src.evaluation.threshold import select_best_threshold
 
 _DAS_LIMIT: float = 0.10  # danger_as_safe < 10%
 
@@ -103,16 +104,7 @@ def main() -> None:
     d = cfg["data"]
     image_size: int = d.get("image_size", 336)
     padding_color: str = d.get("padding_color", "black")
-    eval_label_col: str = d.get("eval_label_col", d.get("label_col", "confirmed_label"))
-    split_col: str = d.get("split_col", "split")
-    unk_label: str = d.get("unk_label", "excluded")
-    ds_kwargs: dict[str, Any] = {
-        "unk_label": unk_label,
-        "label_col": eval_label_col,
-        "split_col": split_col,
-    }
-    if "csv_path" in d:
-        ds_kwargs["csv_path"] = Path(d["csv_path"])
+    ds_kwargs = dataset_kwargs(d, use_eval_label_col=True)
     val_ds = HazardDataset("val", transform=get_val_transforms(image_size, padding_color), **ds_kwargs)
     val_loader = DataLoader(
         val_ds,
@@ -133,29 +125,26 @@ def main() -> None:
 
     candidates = [r for r in rows if r["danger_as_safe"] < _DAS_LIMIT]
     print(f"\n[tune] danger_as_safe < {_DAS_LIMIT * 100:.0f}% 만족 threshold 목록:")
-    if candidates:
-        for r in candidates:
-            print(
-                f"  thr={r['threshold']:.2f}  "
-                f"danger_prec={r['danger_precision'] * 100:.2f}%  "
-                f"danger_recall={r['danger_recall'] * 100:.2f}%  "
-                f"danger_as_safe={r['danger_as_safe'] * 100:.2f}%"
-            )
-        best = max(candidates, key=lambda r: r["danger_precision"])
+    for r in candidates:
         print(
-            f"\n[tune] 추천 threshold : {best['threshold']:.2f}"
-            f"\n         danger_prec   = {best['danger_precision'] * 100:.2f}%"
-            f"\n         danger_recall = {best['danger_recall'] * 100:.2f}%"
-            f"\n         danger_as_safe= {best['danger_as_safe'] * 100:.2f}%"
-            f"\n         accuracy      = {best['accuracy']:.3f}"
+            f"  thr={r['threshold']:.2f}  "
+            f"danger_prec={r['danger_precision'] * 100:.2f}%  "
+            f"danger_recall={r['danger_recall'] * 100:.2f}%  "
+            f"danger_as_safe={r['danger_as_safe'] * 100:.2f}%"
         )
-    else:
-        fallback = min(rows, key=lambda r: r["danger_as_safe"])
+    if not candidates:
         print("  (조건 만족 threshold 없음 — danger_as_safe 최솟값 기준으로 대체 추천)")
-        print(
-            f"\n[tune] 추천 threshold : {fallback['threshold']:.2f}"
-            f"  (danger_as_safe={fallback['danger_as_safe'] * 100:.2f}%)"
-        )
+
+    # 추천 thr: 평가 파이프라인과 동일한 단일 규칙 (das <= limit 하 danger precision 최대)
+    best_thr = select_best_threshold(probs, labels, [r["threshold"] for r in rows], _DAS_LIMIT)
+    best = next(r for r in rows if abs(r["threshold"] - best_thr) < 1e-9)
+    print(
+        f"\n[tune] 추천 threshold : {best['threshold']:.2f}"
+        f"\n         danger_prec   = {best['danger_precision'] * 100:.2f}%"
+        f"\n         danger_recall = {best['danger_recall'] * 100:.2f}%"
+        f"\n         danger_as_safe= {best['danger_as_safe'] * 100:.2f}%"
+        f"\n         accuracy      = {best['accuracy']:.3f}"
+    )
 
 
 if __name__ == "__main__":

@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
 
 import matplotlib
 matplotlib.use("Agg")
@@ -21,20 +20,27 @@ from torch.utils.data import DataLoader
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts._eval_common import apply_threshold, build_model, collect_probs, detect_device, load_config
-from src.data.dataset import HazardDataset
+from scripts._eval_common import (
+    apply_threshold,
+    build_model,
+    collect_probs,
+    dataset_kwargs,
+    detect_device,
+    load_config,
+    resolve_checkpoint,
+)
+from src.data.dataset import CLASS_NAME_LIST, DANGER, HazardDataset
 from src.data.transforms import get_val_transforms
+from src.evaluation.report_artifacts import CLASS_COLORS
 
 _DEFAULT_CONFIG = Path("configs/exp_v_bicubic.yaml")
 _DEFAULT_EXP = "exp_v_bicubic"
 
-_CLASS_NAMES = ["cut", "danger", "excluded"]
-_CLASS_COLORS = ["#2ecc71", "#e74c3c", "#3498db"]
+_CLASS_NAMES = CLASS_NAME_LIST
+_CLASS_COLORS = CLASS_COLORS
 _AMBIGUOUS_LO = 0.4
 _AMBIGUOUS_HI = 0.6
 _CONFIDENT_THR = 0.8
-
-CUT, DANGER, EXCLUDED = 0, 1, 2
 
 
 def _parse_args() -> argparse.Namespace:
@@ -50,29 +56,6 @@ def _parse_args() -> argparse.Namespace:
         default=Path(f"experiments/{_DEFAULT_EXP}/visualizations"),
     )
     return p.parse_args()
-
-
-def _resolve_checkpoint(cfg: dict[str, Any], explicit: Path | None) -> Path:
-    if explicit is not None:
-        if not explicit.exists():
-            sys.exit(f"[ERROR] checkpoint not found: {explicit}")
-        return explicit
-    ckpt_dir = _PROJECT_ROOT / "experiments" / cfg["experiment"]["name"] / "checkpoints"
-    candidates = sorted(ckpt_dir.glob("best_val_loss_*.ckpt"))
-    if not candidates:
-        sys.exit(f"[ERROR] best_val_loss_*.ckpt not found in {ckpt_dir}")
-    return candidates[-1]
-
-
-def _dataset_kwargs(d: dict[str, Any]) -> dict[str, Any]:
-    kw: dict[str, Any] = {
-        "unk_label": d.get("unk_label", "excluded"),
-        "label_col": d.get("label_col", "confirmed_label"),
-        "split_col": d.get("split_col", "split"),
-    }
-    if "csv_path" in d:
-        kw["csv_path"] = Path(d["csv_path"])
-    return kw
 
 
 def _plot_class_danger_hist(
@@ -188,7 +171,7 @@ def _plot_misclassification_confidence(
 def main() -> None:
     args = _parse_args()
     cfg = load_config(args.config)
-    ckpt = _resolve_checkpoint(cfg, args.checkpoint)
+    ckpt = resolve_checkpoint(cfg, args.checkpoint)
     device = detect_device(args.device)
 
     print(f"[confidence] config     : {args.config}")
@@ -199,7 +182,7 @@ def main() -> None:
     d = cfg["data"]
     image_size: int = d.get("image_size", 336)
     model = build_model(cfg, ckpt, device)
-    ds = HazardDataset("test", transform=get_val_transforms(image_size), **_dataset_kwargs(d))
+    ds = HazardDataset("test", transform=get_val_transforms(image_size), **dataset_kwargs(d))
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                         num_workers=d.get("num_workers", 4), pin_memory=device.type == "cuda")
     print(f"[confidence] test n={len(ds)}, running inference …")

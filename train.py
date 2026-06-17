@@ -17,10 +17,11 @@ from typing import Any
 import torch
 from torch.utils.data import ConcatDataset, DataLoader
 
-from scripts._eval_common import detect_device, load_config
+from scripts._eval_common import build_model, detect_device, load_config
+from scripts.evaluate_test import evaluate_checkpoint
 from src.data.dataset import HazardDataset, compute_class_weights
 from src.data.transforms import get_train_transforms, get_val_transforms
-from src.models.hazard_model import HazardModel, ModelConfig, VPTConfig
+from src.models.hazard_model import HazardModel
 from src.training.checkpoint import CheckpointManager
 from src.training.trainer import Trainer, set_seed
 
@@ -33,29 +34,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="auto", help="cuda / cpu / auto (default: auto)")
     p.add_argument("--resume", type=Path, default=None, help="Checkpoint path to resume from")
     p.add_argument("--epochs", type=int, default=None, help="Override training.epochs in config")
+    p.add_argument("--testset-root", type=Path, default=None,
+                   help="외부 testset 루트 (미지정 시 config의 data.testset_root 사용). "
+                        "Ctrl+C 중단 시 best checkpoint 평가에 사용")
     return p.parse_args()
-
-
-def _build_model_config(cfg: dict[str, Any]) -> ModelConfig:
-    m = cfg["model"]
-    vpt_raw = m.get("vpt", {})
-    backbone_raw = m.get("backbone", {})
-    return ModelConfig(
-        backbone_name=m.get("backbone_name", "dinov2_vitb14"),
-        backbone_frozen=backbone_raw.get("frozen", True),
-        unfreeze_last_n=backbone_raw.get("unfreeze_last_n", 0),
-        head_type=m.get("head_type", "mlp"),
-        vpt=VPTConfig(
-            enabled=vpt_raw.get("enabled", False),
-            num_tokens=vpt_raw.get("num_tokens", 10),
-            insert_from_layer=vpt_raw.get("insert_from_layer", 0),
-        ),
-        dropout=m.get("dropout", 0.3),
-        num_classes=m.get("num_classes", 3),
-        use_grad_checkpoint=m.get("use_grad_checkpoint", True),
-        class_aware_init_weights=m.get("class_aware_init_weights", None),
-        head_use_cls=m.get("head_use_cls", False),
-    )
 
 
 def _build_dataloaders(cfg: dict[str, Any]) -> tuple[DataLoader, DataLoader, torch.Tensor]:
@@ -139,6 +121,61 @@ def _maybe_resume(args: argparse.Namespace, model: HazardModel, trainer: Trainer
     print(f"[train] Resumed from epoch {ckpt['epoch']} ({args.resume.name})")
 
 
+def _resolve_testset_root(args: argparse.Namespace, cfg: dict[str, Any]) -> Path | None:
+    if args.testset_root is not None:
+        return args.testset_root
+    raw = cfg.get("data", {}).get("testset_root")
+    return Path(raw) if raw else None
+
+
+def _find_best_checkpoint(ckpt_dir: Path) -> Path | None:
+    """best_model.pth 우선, 없으면 가장 최근에 저장된 best_*.ckpt를 반환."""
+    primary = ckpt_dir / "best_model.pth"
+    if primary.exists():
+        return primary
+    candidates = sorted(ckpt_dir.glob("best_*.ckpt"), key=lambda p: p.stat().st_mtime)
+    return candidates[-1] if candidates else None
+
+
+def _evaluate_on_interrupt(
+    args: argparse.Namespace,
+    cfg: dict[str, Any],
+    trainer: Trainer,
+    ckpt_dir: Path,
+    exp_name: str,
+) -> None:
+    """Ctrl+C 중단 시 best checkpoint로 4타겟 평가를 직접 실행."""
+    print("\n[train] 학습 중단됨. best checkpoint로 평가를 실행합니다 …")
+
+    testset_root = _resolve_testset_root(args, cfg)
+    if testset_root is None:
+        print("[train] ⚠ testset_root가 config(data.testset_root)나 --testset-root 인자에 없습니다. "
+              "평가를 건너뜁니다.")
+        return
+    if not testset_root.exists():
+        print(f"[train] ⚠ testset_root 경로가 존재하지 않습니다: {testset_root}. 평가를 건너뜁니다.")
+        return
+
+    best_ckpt = _find_best_checkpoint(ckpt_dir)
+    if best_ckpt is None:
+        print(f"[train] ⚠ best checkpoint를 찾지 못했습니다: {ckpt_dir}. 평가를 건너뜁니다.")
+        return
+    print(f"[train] best checkpoint: {best_ckpt.name}")
+
+    # EMA 활성 시 저장된 best checkpoint는 이미 ema_model.module 가중치로 기록된다(trainer.py).
+    if trainer.ema_model is not None:
+        print("[train] EMA 활성 — best checkpoint에 EMA 가중치가 반영되어 있습니다.")
+
+    # 두 번째 Ctrl+C는 여기서 캐치하지 않는다 → KeyboardInterrupt 전파로 즉시 강제 종료.
+    summary = evaluate_checkpoint(
+        cfg, best_ckpt, testset_root,
+        output_dir=Path("results") / exp_name,
+        device=args.device,
+        batch_size=cfg.get("data", {}).get("batch_size", 32),
+    )
+    print(f"[train] 중단 평가 완료 → {summary}")
+
+
 def main() -> None:
     args = _parse_args()
     cfg = load_config(args.config)
@@ -165,9 +202,10 @@ def main() -> None:
     print(f"[train] Device    : {device_label}")
     print(f"[train] Output    : {output_dir}")
 
-    model_cfg = _build_model_config(cfg)
-    print(f"[train] Building model ({model_cfg.backbone_name}, head={model_cfg.head_type}) …")
-    model = HazardModel(model_cfg)
+    m_cfg = cfg["model"]
+    print(f"[train] Building model ({m_cfg.get('backbone_name', 'dinov2_vitb14')}, "
+          f"head={m_cfg.get('head_type', 'mlp')}) …")
+    model = build_model(cfg, None, device)
 
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     n_frozen = sum(p.numel() for p in model.parameters() if not p.requires_grad)
@@ -214,12 +252,16 @@ def main() -> None:
 
     print(
         f"[train] Training  : epochs={t_cfg.get('epochs', 30)}"
-        f" | lr={t_cfg.get('lr', 1e-5):.1e}"
+        f" | lr={t_cfg.get('head_lr', t_cfg.get('lr', 1e-5)):.1e}"
         f" | patience={t_cfg.get('early_stopping_patience', 10)}"
     )
     print("[train] " + "-" * 72)
 
-    best = trainer.fit(verbose=True)
+    try:
+        best = trainer.fit(verbose=True)
+    except KeyboardInterrupt:
+        _evaluate_on_interrupt(args, cfg, trainer, ckpt_dir, exp_name)
+        return
 
     print("[train] " + "-" * 72)
     if best:

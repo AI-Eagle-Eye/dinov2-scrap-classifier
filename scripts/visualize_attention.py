@@ -22,15 +22,22 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import DataLoader
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts._eval_common import build_model, collect_probs, detect_device, load_config
-from src.data.dataset import CLASS_NAMES, HazardDataset
+from scripts._eval_common import (
+    build_model,
+    collect_cases,
+    collect_probs,
+    dataset_kwargs,
+    detect_device,
+    load_config,
+    resolve_checkpoint,
+)
+from src.data.dataset import CLASS_NAMES, CUT, DANGER, HazardDataset
 from src.data.transforms import get_val_transforms
 
 _DEFAULT_CONFIG = Path("configs/exp_v_bicubic.yaml")
@@ -40,8 +47,6 @@ _COLS = 4
 _DPI = 150
 _ALPHA = 0.5
 
-CUT, DANGER, EXCLUDED = 0, 1, 2
-
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Attention map overlay visualization")
@@ -49,53 +54,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint", type=Path, default=None)
     p.add_argument("--device", default="auto")
     p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--threshold", type=float, default=0.30, help="파일명 태깅용 thr")
     p.add_argument(
         "--output-dir", type=Path,
         default=Path(f"experiments/{_DEFAULT_EXP}/visualizations/attention_maps"),
     )
     return p.parse_args()
-
-
-def _resolve_checkpoint(cfg: dict[str, Any], explicit: Path | None) -> Path:
-    if explicit is not None:
-        if not explicit.exists():
-            sys.exit(f"[ERROR] checkpoint not found: {explicit}")
-        return explicit
-    ckpt_dir = _PROJECT_ROOT / "experiments" / cfg["experiment"]["name"] / "checkpoints"
-    candidates = sorted(ckpt_dir.glob("best_val_loss_*.ckpt"))
-    if not candidates:
-        sys.exit(f"[ERROR] best_val_loss_*.ckpt not found in {ckpt_dir}")
-    return candidates[-1]
-
-
-def _dataset_kwargs(d: dict[str, Any]) -> dict[str, Any]:
-    kw: dict[str, Any] = {
-        "unk_label": d.get("unk_label", "excluded"),
-        "label_col": d.get("label_col", "confirmed_label"),
-        "split_col": d.get("split_col", "split"),
-    }
-    if "csv_path" in d:
-        kw["csv_path"] = Path(d["csv_path"])
-    return kw
-
-
-def _collect_cases(
-    dataset: HazardDataset,
-    probs: np.ndarray,
-    true_cls: int,
-    pred_cls: int,
-    n: int,
-) -> list[tuple[Path, int, int, np.ndarray]]:
-    """(img_path, true_idx, pred_idx, prob_vec) n개 수집, danger_prob 내림차순."""
-    results: list[tuple[Path, int, int, np.ndarray]] = []
-    labels = dataset.labels
-    paths = [p for p, _ in dataset._samples]
-    for i, true in enumerate(labels):
-        pred = int(probs[i].argmax())
-        if true == true_cls and pred == pred_cls:
-            results.append((paths[i], true, pred, probs[i]))
-    results.sort(key=lambda r: -r[3][DANGER])
-    return results[:n]
 
 
 @torch.inference_mode()
@@ -191,7 +155,7 @@ def _save_grid(
 def main() -> None:
     args = _parse_args()
     cfg = load_config(args.config)
-    ckpt = _resolve_checkpoint(cfg, args.checkpoint)
+    ckpt = resolve_checkpoint(cfg, args.checkpoint)
     device = detect_device(args.device)
 
     print(f"[attn_viz] config     : {args.config}")
@@ -207,23 +171,25 @@ def main() -> None:
     model = build_model(cfg, ckpt, device)
     transform = get_val_transforms(image_size)
 
-    ds = HazardDataset("test", transform=transform, **_dataset_kwargs(d))
+    ds = HazardDataset("test", transform=transform, **dataset_kwargs(d))
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                         num_workers=d.get("num_workers", 4), pin_memory=device.type == "cuda")
     print(f"[attn_viz] test n={len(ds)}")
 
     probs, _ = collect_probs(model, loader, device)
 
+    exp_name: str = cfg["experiment"]["name"]
+    tag = f"{exp_name}_thr{args.threshold:.2f}_{image_size}"
     cases_spec: list[tuple[str, str, int, int]] = [
-        ("tp_danger.png",   "TP danger (정답 danger, 예측 danger)",  DANGER, DANGER),
-        ("fn_danger2cut.png","FN danger→cut (danger 놓침, 최위험)", DANGER, CUT),
-        ("fp_cut2danger.png","FP cut→danger (오경보)",              CUT,    DANGER),
+        ("tp_danger",   "TP danger (정답 danger, 예측 danger)",  DANGER, DANGER),
+        ("fn_danger2cut","FN danger→cut (danger 놓침, 최위험)", DANGER, CUT),
+        ("fp_cut2danger","FP cut→danger (오경보)",              CUT,    DANGER),
     ]
 
-    for fname, title, true_cls, pred_cls in cases_spec:
-        cases = _collect_cases(ds, probs, true_cls, pred_cls, _SAMPLES_PER_CASE)
+    for kind, title, true_cls, pred_cls in cases_spec:
+        cases = collect_cases(ds, probs, true_cls, pred_cls, _SAMPLES_PER_CASE)
         _save_grid(cases, model, device, image_size, patch_grid, transform,
-                   title, args.output_dir / fname)
+                   title, args.output_dir / f"{kind}_{tag}.png")
 
     print("[attn_viz] done.")
 

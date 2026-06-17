@@ -21,13 +21,18 @@ from torch.utils.data import DataLoader
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts._eval_common import apply_threshold, collect_probs, detect_device, load_config
+from scripts._eval_common import (
+    apply_threshold,
+    build_model,
+    collect_probs,
+    detect_device,
+    load_config,
+    read_checkpoint_epoch,
+)
 from src.data.dataset import HazardDataset
 from src.data.transforms import get_val_transforms
 from src.evaluation.evaluator import compute_metrics
-from src.models.hazard_model import HazardModel, ModelConfig, VPTConfig
-
-_CLASS_NAMES: list[str] = ["cut", "danger", "excluded"]
+from src.models.hazard_model import HazardModel
 
 # 문서 기준 baseline: 기존 best_model.pth (ep31) @ test, threshold=0.30
 _DOC_BASELINE: dict[str, float] = {
@@ -49,38 +54,6 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--output", type=Path, required=True)
     return p.parse_args()
-
-
-def _build_model_from_ckpt(
-    cfg: dict[str, Any], ckpt_path: Path, device: torch.device
-) -> tuple[HazardModel, int | None]:
-    """전체 ckpt(dict) 또는 bare state_dict(.pth) 모두 로드."""
-    m = cfg["model"]
-    vpt_raw = m.get("vpt", {})
-    model_cfg = ModelConfig(
-        backbone_name=m.get("backbone_name", "dinov2_vitb14"),
-        head_type=m.get("head_type", "mlp"),
-        vpt=VPTConfig(
-            enabled=vpt_raw.get("enabled", False),
-            num_tokens=vpt_raw.get("num_tokens", 10),
-            insert_from_layer=vpt_raw.get("insert_from_layer", 0),
-        ),
-        dropout=m.get("dropout", 0.3),
-        num_classes=m.get("num_classes", 3),
-        use_grad_checkpoint=m.get("use_grad_checkpoint", True),
-        class_aware_init_weights=m.get("class_aware_init_weights", None),
-    )
-    model = HazardModel(model_cfg)
-    obj = torch.load(ckpt_path, map_location=device, weights_only=False)
-    if isinstance(obj, dict) and "model_state_dict" in obj:
-        state = obj["model_state_dict"]
-        epoch = obj.get("epoch")
-    else:
-        state = obj
-        epoch = None
-    model.load_state_dict(state)
-    model.to(device).eval()
-    return model, epoch
 
 
 def _eval_split(
@@ -142,7 +115,8 @@ def main() -> None:
     print("=" * 72)
 
     print("\n[eval] Building model …")
-    model, epoch = _build_model_from_ckpt(cfg, args.checkpoint, device)
+    model = build_model(cfg, args.checkpoint, device)
+    epoch = read_checkpoint_epoch(args.checkpoint, device)
     print(f"[eval] Loaded checkpoint epoch = {epoch}")
 
     print("[eval] Evaluating val …")

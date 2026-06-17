@@ -5,9 +5,9 @@ Reads features.npy + manifest.csv from --out-dir and runs only the block 18
 pipeline, printing the 4-line [18] console output.
 
 Usage:
-    python scripts/test_dedup.py
-    python scripts/test_dedup.py --out-dir reports/eda/crops_25pct
-    python scripts/test_dedup.py --out-dir reports/eda/crops_25pct \\
+    python scripts/dedup_check.py
+    python scripts/dedup_check.py --out-dir reports/eda/crops_25pct
+    python scripts/dedup_check.py --out-dir reports/eda/crops_25pct \\
         --data-dir dataset/classification/crops_25pct
 """
 from __future__ import annotations

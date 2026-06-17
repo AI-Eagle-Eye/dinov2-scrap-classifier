@@ -25,15 +25,17 @@ from scripts._eval_common import (
     apply_threshold,
     build_model,
     collect_probs,
+    dataset_kwargs,
     detect_device,
     load_config,
+    resolve_checkpoint,
 )
-from src.data.dataset import HazardDataset
+from src.data.dataset import DANGER, EXCLUDED, HazardDataset
 from src.data.transforms import get_val_transforms
 from src.evaluation.evaluator import compute_metrics
 
-_EXCLUDED_IDX: int = 2
-_DANGER_IDX: int = 1
+_EXCLUDED_IDX: int = EXCLUDED
+_DANGER_IDX: int = DANGER
 
 # 비교표에 출력할 지표: (metric_key, 표시 라벨)
 _REPORT_METRICS: list[tuple[str, str]] = [
@@ -61,18 +63,6 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _resolve_checkpoint(cfg: dict, explicit: Path | None) -> Path:
-    if explicit is not None:
-        if not explicit.exists():
-            sys.exit(f"[ERROR] checkpoint not found: {explicit}")
-        return explicit
-    ckpt_dir = _PROJECT_ROOT / "experiments" / cfg["experiment"]["name"] / "checkpoints"
-    candidates = sorted(ckpt_dir.glob("best_val_loss_*.ckpt"))
-    if not candidates:
-        sys.exit(f"[ERROR] best_val_loss_*.ckpt not found in {ckpt_dir}")
-    return candidates[-1]
-
-
 def _merge_excluded_to_danger(preds: list[int]) -> list[int]:
     """예측 라벨 중 excluded(2)를 danger(1)로 치환 (보수적 병합)."""
     return [_DANGER_IDX if p == _EXCLUDED_IDX else p for p in preds]
@@ -96,7 +86,7 @@ def _print_comparison(
 def main() -> None:
     args = _parse_args()
     cfg = load_config(args.config)
-    ckpt = _resolve_checkpoint(cfg, args.checkpoint)
+    ckpt = resolve_checkpoint(cfg, args.checkpoint)
     device = detect_device(args.device)
 
     print("=" * 72)
@@ -111,17 +101,10 @@ def main() -> None:
     model = build_model(cfg, ckpt, device)
 
     d = cfg["data"]
-    ds_kwargs: dict = {
-        "unk_label": d.get("unk_label", "excluded"),
-        "label_col": d.get("label_col", "confirmed_label"),
-        "split_col": d.get("split_col", "split"),
-    }
-    if "csv_path" in d:
-        ds_kwargs["csv_path"] = Path(d["csv_path"])
     ds = HazardDataset(
         "test",
         transform=get_val_transforms(d.get("image_size", 336)),
-        **ds_kwargs,
+        **dataset_kwargs(d),
     )
     loader = DataLoader(
         ds,

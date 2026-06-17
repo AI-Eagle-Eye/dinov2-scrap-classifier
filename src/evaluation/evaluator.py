@@ -12,7 +12,9 @@ from sklearn.metrics import (
     recall_score,
 )
 
-_CLASS_NAMES = ["cut", "danger", "excluded"]
+from ..data.dataset import CLASS_NAME_LIST
+
+_CLASS_NAMES = CLASS_NAME_LIST
 
 
 def compute_metrics(
@@ -32,7 +34,8 @@ def compute_metrics(
     f1_macro = float(f1_score(yt, yp, average="macro", zero_division=0))
     f2_macro = float(fbeta_score(yt, yp, beta=2, average="macro", zero_division=0))
 
-    safe_prec = float(precision_score(yt, yp, labels=[0], average="micro", zero_division=0))
+    # safe(=cut) precision == precision_cut. 동일 값을 두 키로 노출(설정/체크포인트 이름 호환).
+    safe_prec = float(prec_per[0])
 
     danger_mask = yt == 1
     danger_as_safe = (

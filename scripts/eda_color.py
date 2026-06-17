@@ -329,7 +329,6 @@ def analysis_2(stats_25: dict[str, ClassStats]) -> dict[str, float]:
 # ── analysis 3 ────────────────────────────────────────────────────────────────
 
 def analysis_3(
-    stats_25: dict[str, ClassStats],
     small_ids: frozenset[int],
     class_dirs: dict[str, str],
 ) -> None:
@@ -482,7 +481,7 @@ def main() -> None:
     print("  저장: figures/color_shift_by_padding.png")
 
     # ── 분석 3
-    analysis_3(stats_25, small_ids, class_dirs)
+    analysis_3(small_ids, class_dirs)
 
     # ── 분석 4
     print("\n" + "=" * 70)

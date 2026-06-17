@@ -18,7 +18,6 @@ import matplotlib.pyplot as plt
 matplotlib.rc("font", family="NanumGothic")
 matplotlib.rc("axes", unicode_minus=False)
 import numpy as np
-import torch
 from PIL import Image
 from torch.utils.data import DataLoader
 
@@ -26,7 +25,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from scripts._eval_common import build_model, collect_probs, detect_device, load_config
-from src.data.dataset import CLASS_NAMES, HazardDataset
+from src.data.dataset import CLASS_NAMES, CUT, DANGER, EXCLUDED, HazardDataset
 from src.data.transforms import get_val_transforms
 
 _GRID_COLS = 4
@@ -163,9 +162,6 @@ def main() -> None:
     all_probs, _ = collect_probs(model, loader, device)
     all_preds = all_probs.argmax(axis=1)
 
-    # 클래스 인덱스: cut=0, danger=1, excluded=2
-    CUT, DANGER, EXCLUDED = 0, 1, 2
-
     cases: list[tuple[str, str, int, int]] = [
         ("case_a_danger_as_safe.png",    "Case A: 실제 danger → 예측 cut  (가장 위험)",     DANGER,   CUT),
         ("case_b_cut_as_danger.png",     "Case B: 실제 cut → 예측 danger  (FP, precision killer)", CUT, DANGER),
@@ -176,8 +172,6 @@ def main() -> None:
     print(f"\n[analysis] output dir : {args.output_dir}")
     for fname, label, true_cls, pred_cls in cases:
         samples = _collect_errors(test_ds, all_probs, all_preds, true_cls, pred_cls)
-        true_name = CLASS_NAMES[true_cls]
-        pred_name = CLASS_NAMES[pred_cls]
         print(f"  {label[:60]:<60}  n={len(samples):>3}", end="")
         if not samples:
             print("  (skip — no samples)")

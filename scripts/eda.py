@@ -1892,7 +1892,6 @@ def analyse_label_noise(samples: list[Sample], features: np.ndarray,
 def analyse_dominant_color(
     samples: list[Sample],
     figures_dir: Path,
-    skipped: list[dict],
 ) -> tuple[dict, dict[str, str]]:
     """Dominant color swatches per class via K-means(k=5) on up to 200 random crops."""
     from sklearn.cluster import KMeans as _KMeans
@@ -1976,7 +1975,7 @@ def analyse_dominant_color(
     )
     fig.tight_layout()
     b64s["21_dominant_color"] = _save_fig(fig, figures_dir / "21_dominant_color.png")
-    print(f"[dominant_color] 21_dominant_color.png 저장 완료")
+    print("[dominant_color] 21_dominant_color.png 저장 완료")
     return {}, b64s
 
 
@@ -2272,7 +2271,7 @@ def write_manifest(samples: list[Sample], path: Path) -> None:
 _CONFUSION_CSV_FIELDS: list[str] = ["img_a", "img_b", "match_type", "score", "cluster_id"]
 
 
-def write_confusion_pairs_csv(pairs: list[dict], samples: list[Sample], path: Path) -> None:
+def write_confusion_pairs_csv(pairs: list[dict], path: Path) -> None:
     """Write cross-class duplicate/similar pairs to CSV."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -2320,7 +2319,7 @@ def write_eda_results(results: dict, skipped: list[dict], path: Path) -> None:
     path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _summary_rows(results: dict, samples: list[Sample]) -> list[dict]:
+def _summary_rows(results: dict) -> list[dict]:
     rows: list[dict] = []
 
     def row(section: str, metric: str, value: Any, unit: str, flag: str) -> dict:
@@ -2377,9 +2376,8 @@ def _summary_rows(results: dict, samples: list[Sample]) -> list[dict]:
     return rows
 
 
-def write_eda_summary(results: dict, samples: list[Sample],
-                      csv_path: Path, md_path: Path) -> None:
-    rows = _summary_rows(results, samples)
+def write_eda_summary(results: dict, csv_path: Path, md_path: Path) -> None:
+    rows = _summary_rows(results)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["section", "metric", "value", "unit", "flag"])
@@ -2578,7 +2576,7 @@ def main() -> None:
         all_b64s.update(b64s)
         confusion_pairs = feat_stats.get("umap_stats", {}).get("confusion_prone_pairs", [])
         if confusion_pairs:
-            write_confusion_pairs_csv(confusion_pairs, samples, out / "confusion_prone_pairs.csv")
+            write_confusion_pairs_csv(confusion_pairs, out / "confusion_prone_pairs.csv")
     else:
         skipped.append({"analysis": "Feature 분석", "reason": "feature 추출 실패 또는 건너뜀",
                         "install": "torch.hub (네트워크/캐시 확인)"})
@@ -2597,7 +2595,7 @@ def main() -> None:
 
     # ── Dominant color ────────────────────────────────────────────────────
     print("\n[색상] 대표 색상 분석 (K-means)")
-    _, dom_b64s = analyse_dominant_color(samples, figures_dir, skipped)
+    _, dom_b64s = analyse_dominant_color(samples, figures_dir)
     all_b64s.update(dom_b64s)
 
     # ── Gabor texture ─────────────────────────────────────────────────────
@@ -2641,10 +2639,10 @@ def main() -> None:
     if not manifest_path.exists() or args.force_reextract:
         write_manifest(samples, manifest_path)
     else:
-        print(f"[manifest] 기존 파일 재사용 (강제 재작성: --force-reextract)")
+        print("[manifest] 기존 파일 재사용 (강제 재작성: --force-reextract)")
     write_slice_index(samples, out / "slice_index.json")
     write_eda_results(eda_results, skipped, out / "eda_results.json")
-    write_eda_summary(eda_results, samples, out / "eda_summary.csv", out / "eda_summary.md")
+    write_eda_summary(eda_results, out / "eda_summary.csv", out / "eda_summary.md")
     write_html_report(all_b64s, eda_results, samples, out / "eda_report.html")
 
     # ── Console summary ───────────────────────────────────────────────────

@@ -51,6 +51,9 @@ dataset
 #reports
 reports
 
+# 평가 산출물 — predictions.csv가 image_path를 포함하므로 커밋 금지
+results/
+
 #EXPERIMENT
 docs
 experiments/*/checkpoints

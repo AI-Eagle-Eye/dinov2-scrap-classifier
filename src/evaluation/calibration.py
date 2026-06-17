@@ -1,7 +1,29 @@
 from __future__ import annotations
 
+import numpy as np
 import torch
 import torch.nn as nn
+
+_DEFAULT_ECE_BINS: int = 15
+
+
+def compute_ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = _DEFAULT_ECE_BINS) -> float:
+    """Expected Calibration Error (max-confidence, equal-width binning)."""
+    confidences = probs.max(axis=1)
+    predictions = probs.argmax(axis=1)
+    accuracies = predictions == labels
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    n = len(probs)
+    ece = 0.0
+    for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
+        in_bin = (confidences > lo) & (confidences <= hi)
+        count = int(in_bin.sum())
+        if count == 0:
+            continue
+        bin_acc = float(accuracies[in_bin].mean())
+        bin_conf = float(confidences[in_bin].mean())
+        ece += (count / n) * abs(bin_acc - bin_conf)
+    return float(ece)
 
 
 class TemperatureScaler(nn.Module):

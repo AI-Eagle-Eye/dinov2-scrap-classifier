@@ -418,7 +418,7 @@ def main() -> None:
 
     # aspect ratio 요약 콘솔 출력
     pad_key = "crops_25pct"
-    print(f"\n  aspect ratio 요약 (crops_25pct, width/height)")
+    print("\n  aspect ratio 요약 (crops_25pct, width/height)")
     print(f"  {'클래스':>10s} | {'중앙값':>8s} | {'p25':>8s} | {'p75':>8s} | {'<0.7(세로)':>10s} | {'>1.4(가로)':>10s}")
     print("  " + "-" * 72)
     for cls in CAT_ID_TO_NAME.values():

@@ -111,7 +111,3 @@ class HazardModel(nn.Module):
 
     def trainable_parameters(self) -> list[nn.Parameter]:
         return [p for p in self.parameters() if p.requires_grad]
-
-
-def build_model(config: ModelConfig) -> HazardModel:
-    return HazardModel(config)

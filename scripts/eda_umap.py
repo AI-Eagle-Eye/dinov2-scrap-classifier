@@ -435,7 +435,7 @@ def main() -> None:
     sep = _cluster_separation(sil["silhouette_overall"])
     nec = _vpt_paa_necessity(sep)
 
-    print(f"\n[silhouette results]")
+    print("\n[silhouette results]")
     print(f"  overall:  {sil['silhouette_overall']:.4f}  → separation={sep}")
     for cls_name, v in sil["silhouette_by_class"].items():
         print(f"  {cls_name}: {v:.4f}")

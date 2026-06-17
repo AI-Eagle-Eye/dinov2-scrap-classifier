@@ -208,7 +208,7 @@ def main() -> None:
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     fig.savefig(OUTPUT_PATH, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"\n저장 완료: reports/eda/figures/resolution_scatter.png")
+    print("\n저장 완료: reports/eda/figures/resolution_scatter.png")
 
 
 if __name__ == "__main__":

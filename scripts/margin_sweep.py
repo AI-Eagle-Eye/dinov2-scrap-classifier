@@ -22,26 +22,29 @@ import argparse
 import csv
 import sys
 from pathlib import Path
-from typing import Any
 
-import numpy as np
-import torch
 from torch.utils.data import DataLoader
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts._eval_common import collect_probs, detect_device, load_config
-from src.data.dataset import HazardDataset
+from scripts._eval_common import (
+    build_model,
+    collect_probs,
+    dataset_kwargs,
+    detect_device,
+    load_config,
+)
 from src.data.transforms import get_val_transforms
-from src.evaluation.evaluator import compute_metrics
-from src.models.hazard_model import HazardModel, ModelConfig, VPTConfig
+from src.data.dataset import HazardDataset
+from src.evaluation.report_artifacts import (
+    DANGER_THRS,
+    MARGIN_SWEEP_FIELDS,
+    MARGINS,
+    margin_sweep_rows,
+)
 
-_CUT, _DANGER, _EXCLUDED = 0, 1, 2
 _DAS_LIMIT: float = 0.15
-
-_DANGER_THRS: list[float] = [round(0.30 + 0.05 * i, 2) for i in range(7)]   # 0.30..0.60
-_MARGINS: list[float] = [round(0.05 + 0.05 * i, 2) for i in range(6)]        # 0.05..0.30
 
 
 def _parse_args() -> argparse.Namespace:
@@ -53,44 +56,6 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--output", type=Path, required=True)
     return p.parse_args()
-
-
-def _build_model(cfg: dict[str, Any], ckpt_path: Path, device: torch.device) -> HazardModel:
-    m = cfg["model"]
-    vpt_raw = m.get("vpt", {})
-    model_cfg = ModelConfig(
-        backbone_name=m.get("backbone_name", "dinov2_vitb14"),
-        head_type=m.get("head_type", "mlp"),
-        vpt=VPTConfig(
-            enabled=vpt_raw.get("enabled", False),
-            num_tokens=vpt_raw.get("num_tokens", 10),
-            insert_from_layer=vpt_raw.get("insert_from_layer", 0),
-        ),
-        dropout=m.get("dropout", 0.3),
-        num_classes=m.get("num_classes", 3),
-        use_grad_checkpoint=m.get("use_grad_checkpoint", True),
-        class_aware_init_weights=m.get("class_aware_init_weights", None),
-    )
-    model = HazardModel(model_cfg)
-    obj = torch.load(ckpt_path, map_location=device, weights_only=False)
-    state = obj["model_state_dict"] if isinstance(obj, dict) and "model_state_dict" in obj else obj
-    model.load_state_dict(state)
-    model.to(device).eval()
-    return model
-
-
-def _apply_margin_rule(probs: np.ndarray, danger_thr: float, margin: float) -> np.ndarray:
-    p_cut = probs[:, _CUT]
-    p_danger = probs[:, _DANGER]
-    p_excluded = probs[:, _EXCLUDED]
-
-    is_candidate = p_danger >= danger_thr
-    is_confident = (p_danger - p_cut) >= margin
-
-    preds = np.where(p_cut >= p_excluded, _CUT, _EXCLUDED)  # 기본: danger 후보 아님
-    preds = np.where(is_candidate & ~is_confident, _EXCLUDED, preds)  # 모호 → excluded
-    preds = np.where(is_candidate & is_confident, _DANGER, preds)     # 확신 → danger
-    return preds
 
 
 def main() -> None:
@@ -108,13 +73,13 @@ def main() -> None:
     print(f"  Device     : {device}")
     print("=" * 72)
 
-    model = _build_model(cfg, args.checkpoint, device)
+    model = build_model(cfg, args.checkpoint, device)
 
     d = cfg["data"]
     ds = HazardDataset(
         args.split,
         transform=get_val_transforms(d.get("image_size", 336)),
-        unk_label=d.get("unk_label", "excluded"),
+        **dataset_kwargs(d),
     )
     loader = DataLoader(
         ds, batch_size=args.batch_size, shuffle=False,
@@ -122,33 +87,14 @@ def main() -> None:
     )
     print(f"[sweep] {args.split} samples: {len(ds)}  추론 중 …")
     probs, labels = collect_probs(model, loader, device)
-    labels_list = labels.tolist()
 
-    rows: list[dict[str, float]] = []
-    for danger_thr in _DANGER_THRS:
-        for margin in _MARGINS:
-            preds = _apply_margin_rule(probs, danger_thr, margin)
-            m = compute_metrics(labels_list, preds.tolist())
-            coverage = float(np.mean(preds != _EXCLUDED))
-            rows.append({
-                "danger_thr": danger_thr,
-                "margin": margin,
-                "danger_precision": m["precision_danger"],
-                "danger_recall": m["recall_danger"],
-                "danger_as_safe": m["danger_as_safe_rate"],
-                "coverage": coverage,
-                "f1_macro": m["f1_macro"],
-                "accuracy": m["accuracy"],
-            })
+    rows = margin_sweep_rows(probs, labels, DANGER_THRS, MARGINS)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["danger_thr", "margin", "danger_precision", "danger_recall",
-              "danger_as_safe", "coverage", "f1_macro", "accuracy"]
     with args.output.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
+        w = csv.DictWriter(f, fieldnames=MARGIN_SWEEP_FIELDS)
         w.writeheader()
-        for r in rows:
-            w.writerow({k: round(r[k], 6) for k in fields})
+        w.writerows(rows)
     print(f"[sweep] 저장: {args.output}  ({len(rows)} combos)")
 
     # 콘솔 표
@@ -156,23 +102,23 @@ def main() -> None:
           f" {'d_as_safe':>9} | {'coverage':>8}")
     print("  " + "-" * 60)
     for r in rows:
-        flag = " *" if r["danger_as_safe"] < _DAS_LIMIT else ""
+        flag = " *" if r["miss_rate_danger"] < _DAS_LIMIT else ""
         print(f"  {r['danger_thr']:>5.2f} | {r['margin']:>6.2f} |"
-              f" {r['danger_precision']*100:>6.2f}% | {r['danger_recall']*100:>7.2f}% |"
-              f" {r['danger_as_safe']*100:>8.2f}% | {r['coverage']*100:>7.2f}%{flag}")
+              f" {r['precision_danger']*100:>6.2f}% | {r['recall_danger']*100:>7.2f}% |"
+              f" {r['miss_rate_danger']*100:>8.2f}% | {r['coverage']*100:>7.2f}%{flag}")
     print("  " + "-" * 60)
     print(f"  * danger_as_safe < {_DAS_LIMIT*100:.0f}% 만족")
 
     # 최적 조합: das<0.15 제약 하 danger_precision 최대
-    feasible = [r for r in rows if r["danger_as_safe"] < _DAS_LIMIT]
+    feasible = [r for r in rows if r["miss_rate_danger"] < _DAS_LIMIT]
     if feasible:
-        best = max(feasible, key=lambda r: r["danger_precision"])
+        best = max(feasible, key=lambda r: r["precision_danger"])
         print(f"\n[sweep] 최적 조합 (das<{_DAS_LIMIT:.2f} 하 danger_precision 최대):")
         print(f"  danger_thr     = {best['danger_thr']:.2f}")
         print(f"  margin         = {best['margin']:.2f}")
-        print(f"  danger_precision = {best['danger_precision']*100:.2f}%")
-        print(f"  danger_recall    = {best['danger_recall']*100:.2f}%")
-        print(f"  danger_as_safe   = {best['danger_as_safe']*100:.2f}%")
+        print(f"  danger_precision = {best['precision_danger']*100:.2f}%")
+        print(f"  danger_recall    = {best['recall_danger']*100:.2f}%")
+        print(f"  danger_as_safe   = {best['miss_rate_danger']*100:.2f}%")
         print(f"  coverage         = {best['coverage']*100:.2f}%")
         print(f"  f1_macro         = {best['f1_macro']*100:.2f}%  accuracy={best['accuracy']*100:.2f}%")
     else:

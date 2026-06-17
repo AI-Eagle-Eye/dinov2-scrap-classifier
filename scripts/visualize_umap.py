@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
 
 import matplotlib
 matplotlib.use("Agg")
@@ -25,16 +24,23 @@ from torch.utils.data import DataLoader
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts._eval_common import build_model, detect_device, load_config
-from src.data.dataset import HazardDataset
+from scripts._eval_common import (
+    build_model,
+    dataset_kwargs,
+    detect_device,
+    load_config,
+    resolve_checkpoint,
+)
+from src.data.dataset import CLASS_NAME_LIST, HazardDataset
 from src.data.transforms import get_val_transforms
-from src.models.hazard_model import HazardModel, ModelConfig, VPTConfig
+from src.evaluation.report_artifacts import CLASS_COLORS
+from src.models.hazard_model import HazardModel
 
 _DEFAULT_CONFIG = Path("configs/exp_v_bicubic.yaml")
 _DEFAULT_EXP = "exp_v_bicubic"
 
-_CLASS_COLORS = ["#2ecc71", "#e74c3c", "#3498db"]   # cut / danger / excluded
-_CLASS_LABELS = ["cut", "danger", "excluded"]
+_CLASS_COLORS = CLASS_COLORS
+_CLASS_LABELS = CLASS_NAME_LIST
 
 
 def _parse_args() -> argparse.Namespace:
@@ -52,29 +58,6 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _resolve_checkpoint(cfg: dict[str, Any], explicit: Path | None) -> Path:
-    if explicit is not None:
-        if not explicit.exists():
-            sys.exit(f"[ERROR] checkpoint not found: {explicit}")
-        return explicit
-    ckpt_dir = _PROJECT_ROOT / "experiments" / cfg["experiment"]["name"] / "checkpoints"
-    candidates = sorted(ckpt_dir.glob("best_val_loss_*.ckpt"))
-    if not candidates:
-        sys.exit(f"[ERROR] best_val_loss_*.ckpt not found in {ckpt_dir}")
-    return candidates[-1]
-
-
-def _dataset_kwargs(d: dict[str, Any]) -> dict[str, Any]:
-    kw: dict[str, Any] = {
-        "unk_label": d.get("unk_label", "excluded"),
-        "label_col": d.get("label_col", "confirmed_label"),
-        "split_col": d.get("split_col", "split"),
-    }
-    if "csv_path" in d:
-        kw["csv_path"] = Path(d["csv_path"])
-    return kw
-
-
 @torch.inference_mode()
 def _extract_cls_tokens(
     model: HazardModel,
@@ -89,27 +72,6 @@ def _extract_cls_tokens(
         all_feats.append(cls_token.cpu().numpy())
         all_labels.extend(labels.tolist())
     return np.concatenate(all_feats, axis=0), np.array(all_labels, dtype=int)
-
-
-def _build_pretrained_model(cfg: dict[str, Any], device: torch.device) -> HazardModel:
-    """체크포인트 없이 사전학습 가중치만 가진 모델 생성 (before 상태)."""
-    m = cfg["model"]
-    vpt_raw = m.get("vpt", {})
-    model_cfg = ModelConfig(
-        backbone_name=m.get("backbone_name", "dinov2_vitb14"),
-        head_type=m.get("head_type", "mlp"),
-        vpt=VPTConfig(
-            enabled=vpt_raw.get("enabled", False),
-            num_tokens=vpt_raw.get("num_tokens", 10),
-            insert_from_layer=vpt_raw.get("insert_from_layer", 0),
-        ),
-        dropout=m.get("dropout", 0.3),
-        num_classes=m.get("num_classes", 3),
-        use_grad_checkpoint=m.get("use_grad_checkpoint", True),
-    )
-    model = HazardModel(model_cfg)
-    model.to(device).eval()
-    return model
 
 
 def _run_umap(feats: np.ndarray, n_neighbors: int, min_dist: float) -> np.ndarray:
@@ -139,7 +101,7 @@ def _scatter(ax: plt.Axes, emb: np.ndarray, labels: np.ndarray, title: str) -> N
 def main() -> None:
     args = _parse_args()
     cfg = load_config(args.config)
-    ckpt = _resolve_checkpoint(cfg, args.checkpoint)
+    ckpt = resolve_checkpoint(cfg, args.checkpoint)
     device = detect_device(args.device)
 
     print(f"[umap_viz] config     : {args.config}")
@@ -149,13 +111,13 @@ def main() -> None:
     d = cfg["data"]
     image_size: int = d.get("image_size", 336)
     transform = get_val_transforms(image_size)
-    ds = HazardDataset("test", transform=transform, **_dataset_kwargs(d))
+    ds = HazardDataset("test", transform=transform, **dataset_kwargs(d))
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                         num_workers=d.get("num_workers", 4), pin_memory=device.type == "cuda")
     print(f"[umap_viz] test n={len(ds)}, extracting features …")
 
     print("[umap_viz] [1/2] pretrained (before) …")
-    model_before = _build_pretrained_model(cfg, device)
+    model_before = build_model(cfg, None, device)
     feats_before, labels = _extract_cls_tokens(model_before, loader, device)
     del model_before
 

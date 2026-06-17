@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
 
 import matplotlib
 matplotlib.use("Agg")
@@ -25,21 +24,20 @@ from scripts._eval_common import (
     apply_threshold,
     build_model,
     collect_probs,
+    dataset_kwargs,
     detect_device,
     load_config,
+    resolve_checkpoint,
 )
 from src.data.dataset import HazardDataset
 from src.data.transforms import get_val_transforms
+from src.evaluation import report_artifacts as ra
 from src.evaluation.evaluator import compute_metrics
 
 _DEFAULT_CONFIG = Path("configs/exp_v_bicubic.yaml")
 _DEFAULT_EXP = "exp_v_bicubic"
 
-_CLASS_NAMES = ["cut", "danger", "excluded"]
-_CLASS_COLORS = ["#2ecc71", "#e74c3c", "#3498db"]
 _DAS_LIMIT = 0.15
-
-CUT, DANGER, EXCLUDED = 0, 1, 2
 
 
 def _parse_args() -> argparse.Namespace:
@@ -56,100 +54,6 @@ def _parse_args() -> argparse.Namespace:
         default=Path(f"experiments/{_DEFAULT_EXP}/visualizations"),
     )
     return p.parse_args()
-
-
-def _resolve_checkpoint(cfg: dict[str, Any], explicit: Path | None) -> Path:
-    if explicit is not None:
-        if not explicit.exists():
-            sys.exit(f"[ERROR] checkpoint not found: {explicit}")
-        return explicit
-    ckpt_dir = _PROJECT_ROOT / "experiments" / cfg["experiment"]["name"] / "checkpoints"
-    candidates = sorted(ckpt_dir.glob("best_val_loss_*.ckpt"))
-    if not candidates:
-        sys.exit(f"[ERROR] best_val_loss_*.ckpt not found in {ckpt_dir}")
-    return candidates[-1]
-
-
-def _dataset_kwargs(d: dict[str, Any]) -> dict[str, Any]:
-    kw: dict[str, Any] = {
-        "unk_label": d.get("unk_label", "excluded"),
-        "label_col": d.get("label_col", "confirmed_label"),
-        "split_col": d.get("split_col", "split"),
-    }
-    if "csv_path" in d:
-        kw["csv_path"] = Path(d["csv_path"])
-    return kw
-
-
-def _plot_pr_curve(
-    probs: np.ndarray,
-    labels: np.ndarray,
-    out_path: Path,
-) -> None:
-    from sklearn.metrics import average_precision_score, precision_recall_curve  # noqa: PLC0415
-    from sklearn.preprocessing import label_binarize  # noqa: PLC0415
-
-    y_bin = label_binarize(labels, classes=[0, 1, 2])
-
-    fig, ax = plt.subplots(figsize=(8, 6), dpi=150)
-    for cls_idx, (name, color) in enumerate(zip(_CLASS_NAMES, _CLASS_COLORS)):
-        prec, rec, _ = precision_recall_curve(y_bin[:, cls_idx], probs[:, cls_idx])
-        ap = average_precision_score(y_bin[:, cls_idx], probs[:, cls_idx])
-        ax.plot(rec, prec, color=color, lw=2, label=f"{name}  AP={ap:.3f}")
-
-    ax.set_xlabel("Recall", fontsize=11)
-    ax.set_ylabel("Precision", fontsize=11)
-    ax.set_title("Precision-Recall Curve (test set)", fontsize=12, fontweight="bold")
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved → {out_path}")
-
-
-def _plot_roc_curve(
-    probs: np.ndarray,
-    labels: np.ndarray,
-    out_path: Path,
-) -> None:
-    from sklearn.metrics import auc, roc_auc_score, roc_curve  # noqa: PLC0415
-    from sklearn.preprocessing import label_binarize  # noqa: PLC0415
-
-    y_bin = label_binarize(labels, classes=[0, 1, 2])
-
-    fig, ax = plt.subplots(figsize=(8, 6), dpi=150)
-
-    for cls_idx, (name, color) in enumerate(zip(_CLASS_NAMES, _CLASS_COLORS)):
-        fpr, tpr, _ = roc_curve(y_bin[:, cls_idx], probs[:, cls_idx])
-        roc_auc = auc(fpr, tpr)
-        ax.plot(fpr, tpr, color=color, lw=2, label=f"{name}  AUC={roc_auc:.3f}")
-
-    # micro average
-    fpr_micro, tpr_micro, _ = roc_curve(y_bin.ravel(), probs.ravel())
-    auc_micro = auc(fpr_micro, tpr_micro)
-    ax.plot(fpr_micro, tpr_micro, "k--", lw=1.5, label=f"micro-avg  AUC={auc_micro:.3f}")
-
-    # macro average
-    auc_macro = roc_auc_score(y_bin, probs, average="macro", multi_class="ovr")
-    ax.plot([], [], "k:", lw=1.5, label=f"macro-avg  AUC={auc_macro:.3f}")
-
-    ax.plot([0, 1], [0, 1], "gray", lw=1, linestyle="--", alpha=0.5)
-    ax.set_xlabel("False Positive Rate", fontsize=11)
-    ax.set_ylabel("True Positive Rate", fontsize=11)
-    ax.set_title("ROC Curve (test set)", fontsize=12, fontweight="bold")
-    ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.3)
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  saved → {out_path}")
 
 
 def _plot_threshold_sweep(
@@ -201,7 +105,7 @@ def _plot_threshold_sweep(
 def main() -> None:
     args = _parse_args()
     cfg = load_config(args.config)
-    ckpt = _resolve_checkpoint(cfg, args.checkpoint)
+    ckpt = resolve_checkpoint(cfg, args.checkpoint)
     device = detect_device(args.device)
 
     print(f"[curves] config     : {args.config}")
@@ -211,7 +115,7 @@ def main() -> None:
     d = cfg["data"]
     image_size: int = d.get("image_size", 336)
     model = build_model(cfg, ckpt, device)
-    ds = HazardDataset("test", transform=get_val_transforms(image_size), **_dataset_kwargs(d))
+    ds = HazardDataset("test", transform=get_val_transforms(image_size), **dataset_kwargs(d))
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                         num_workers=d.get("num_workers", 4), pin_memory=device.type == "cuda")
     print(f"[curves] test n={len(ds)}, running inference …")
@@ -219,10 +123,10 @@ def main() -> None:
     probs, labels = collect_probs(model, loader, device)
 
     print("[curves] plotting PR curve …")
-    _plot_pr_curve(probs, labels, args.output_dir / "pr_curve.png")
+    ra.write_pr_curve(args.output_dir / "pr_curve.png", probs, labels)
 
     print("[curves] plotting ROC curve …")
-    _plot_roc_curve(probs, labels, args.output_dir / "roc_curve.png")
+    ra.write_roc_curve(args.output_dir / "roc_curve.png", probs, labels)
 
     print("[curves] plotting threshold sweep …")
     _plot_threshold_sweep(probs, labels, args.thr_min, args.thr_max,

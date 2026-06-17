@@ -7,8 +7,12 @@ data/
 *.tif
 *.tiff
 
-# 실험 산출물 — 모델 가중치(*.pth/*.ckpt) 등 대용량 바이너리, 전체 무시
-experiments/
+# 실험 산출물 — 기본 전체 무시 (모델 가중치 *.pth/*.ckpt 등 대용량 바이너리)
+experiments/*
+# 단, 최근 실험 exp_ar_448의 logs/plots만 추적 (가중치는 *.ckpt/*.pth + checkpoints/로 계속 제외)
+!experiments/exp_ar_448/
+experiments/exp_ar_448/checkpoints/
+!experiments/exp_ar_448/plots/*.png
 reports/*_smoke/
 reports/eda_smoke/
 

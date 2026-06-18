@@ -90,6 +90,7 @@ class _Inference:
     paths: list[Path]
     crop_pcts: list[int]
     n: int
+    feats: np.ndarray  # CLS 임베딩 [N, D] — predictions.csv와 동일 순서 (t-SNE용)
 
 
 def _roots_for_target(testset_root: Path, target: str) -> list[Path]:
@@ -108,8 +109,9 @@ def _infer_variant(
                               transform=get_val_transforms(image_size, padding_color))
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                         num_workers=d.get("num_workers", 4), pin_memory=device.type == "cuda")
-    logits, probs, labels = collect_outputs(model, loader, device, tta=args.tta)
-    return _Inference(logits, probs, labels, ds.paths, ds.crop_pcts, len(ds))
+    logits, probs, labels, feats = collect_outputs(
+        model, loader, device, tta=args.tta, return_features=True)
+    return _Inference(logits, probs, labels, ds.paths, ds.crop_pcts, len(ds), feats)
 
 
 def _inference_for_target(
@@ -133,6 +135,7 @@ def _inference_for_target(
         paths=[path for p in parts for path in p.paths],
         crop_pcts=[c for p in parts for c in p.crop_pcts],
         n=sum(p.n for p in parts),
+        feats=np.concatenate([p.feats for p in parts], axis=0),
     )
 
 
@@ -198,6 +201,7 @@ def _evaluate_target(
         target_dir / "predictions.csv", inf.paths, labels, preds, probs, logits,
         inf.crop_pcts, applied_thr, thr_source,
     )
+    np.save(target_dir / "embeddings.npy", inf.feats)  # predictions.csv와 동일 순서 (t-SNE용)
     ra.write_metrics_csv(target_dir / "metrics.csv", metrics, support, coverage, DISPLAY_NAME_MAP)
     ra.write_threshold_sweep_csv(target_dir / "threshold_sweep.csv", probs, labels, _SWEEP_THRS)
     ra.write_margin_sweep_csv(target_dir / "margin_sweep.csv", probs, labels)

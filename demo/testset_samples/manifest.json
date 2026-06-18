@@ -1,0 +1,152 @@
+[
+  {
+    "id": "cut__00036_original_GT_obj35",
+    "file": "cut/00036_original_GT_obj35.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "cut__00211_original_GT_obj213",
+    "file": "cut/00211_original_GT_obj213.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "cut__00212_original_GT_duplicate_obj213",
+    "file": "cut/00212_original_GT_duplicate_obj213.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "cut__00213_original_GT_duplicate_obj213",
+    "file": "cut/00213_original_GT_duplicate_obj213.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "cut__00303_xlsx_excluded",
+    "file": "cut/00303_xlsx_excluded.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "cut__00304_xlsx_excluded",
+    "file": "cut/00304_xlsx_excluded.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "cut__00305_xlsx_excluded",
+    "file": "cut/00305_xlsx_excluded.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "cut__00314_xlsx_excluded",
+    "file": "cut/00314_xlsx_excluded.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "cut__00316_xlsx_excluded",
+    "file": "cut/00316_xlsx_excluded.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "cut__00333_xlsx_excluded",
+    "file": "cut/00333_xlsx_excluded.jpg",
+    "gt_label": "cut"
+  },
+  {
+    "id": "danger__00000_original_GT_obj2",
+    "file": "danger/00000_original_GT_obj2.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "danger__00001_original_GT_duplicate_obj2",
+    "file": "danger/00001_original_GT_duplicate_obj2.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "danger__00002_original_GT_obj3",
+    "file": "danger/00002_original_GT_obj3.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "danger__00003_original_GT_obj5",
+    "file": "danger/00003_original_GT_obj5.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "danger__00004_original_GT_duplicate_obj5",
+    "file": "danger/00004_original_GT_duplicate_obj5.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "danger__00005_original_GT_duplicate_obj5",
+    "file": "danger/00005_original_GT_duplicate_obj5.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "danger__00006_original_GT_duplicate_obj5",
+    "file": "danger/00006_original_GT_duplicate_obj5.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "danger__00007_original_GT_duplicate_obj5",
+    "file": "danger/00007_original_GT_duplicate_obj5.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "danger__00008_original_GT_duplicate_obj5",
+    "file": "danger/00008_original_GT_duplicate_obj5.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "danger__00009_original_GT_obj6",
+    "file": "danger/00009_original_GT_obj6.jpg",
+    "gt_label": "danger"
+  },
+  {
+    "id": "excluded__00300_xlsx_excluded",
+    "file": "excluded/00300_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  },
+  {
+    "id": "excluded__00301_xlsx_excluded",
+    "file": "excluded/00301_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  },
+  {
+    "id": "excluded__00302_xlsx_excluded",
+    "file": "excluded/00302_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  },
+  {
+    "id": "excluded__00309_xlsx_excluded",
+    "file": "excluded/00309_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  },
+  {
+    "id": "excluded__00318_xlsx_excluded",
+    "file": "excluded/00318_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  },
+  {
+    "id": "excluded__00319_xlsx_excluded",
+    "file": "excluded/00319_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  },
+  {
+    "id": "excluded__00322_xlsx_excluded",
+    "file": "excluded/00322_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  },
+  {
+    "id": "excluded__00323_xlsx_excluded",
+    "file": "excluded/00323_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  },
+  {
+    "id": "excluded__00324_xlsx_excluded",
+    "file": "excluded/00324_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  },
+  {
+    "id": "excluded__00325_xlsx_excluded",
+    "file": "excluded/00325_xlsx_excluded.jpg",
+    "gt_label": "excluded"
+  }
+]

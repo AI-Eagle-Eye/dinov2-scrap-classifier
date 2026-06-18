@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>철스크랩 위험 분류 데모</title>
+
+<!-- ============================== SECTION 1: STYLE ============================== -->
+<style>
+  :root {
+    --danger: #e23; --cut: #2a7; --excluded: #999;
+    --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
+    --text: #e8eaf0; --muted: #8b90a0; --accent: #4f8ef7;
+    --header-h: 60px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  button { font: inherit; cursor: pointer; }
+  .muted { color: var(--muted); }
+
+  /* ---- sticky header ---- */
+  header {
+    height: var(--header-h); flex: 0 0 var(--header-h);
+    display: flex; align-items: center; gap: 20px; padding: 0 18px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0; white-space: nowrap; }
+  .model-card {
+    flex: 1; display: flex; gap: 18px; align-items: center;
+    font-size: 12px; color: var(--muted); overflow: hidden;
+  }
+  .model-card b { color: var(--text); font-weight: 600; }
+  .model-card .pill {
+    background: #11141c; border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 9px; white-space: nowrap;
+  }
+  /* ---- upload drag & drop ---- */
+  #dropzone {
+    flex: 0 0 auto; border: 1.5px dashed var(--border); border-radius: 8px;
+    padding: 8px 14px; font-size: 12px; color: var(--muted);
+    text-align: center; transition: .15s;
+  }
+  #dropzone.drag { border-color: var(--accent); color: var(--accent); background: #11141c; }
+  #dropzone b { color: var(--accent); }
+  /* ---- TTA toggle switch ---- */
+  #tta-toggle { flex: 0 0 auto; display: flex; align-items: center; gap: 7px;
+                font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+  #tta-toggle input { display: none; }
+  .tta-track { width: 34px; height: 18px; border-radius: 9px; background: var(--border);
+               position: relative; transition: background .15s; }
+  .tta-knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+              border-radius: 50%; background: #fff; transition: transform .15s; }
+  #tta-toggle input:checked + .tta-track { background: var(--accent); }
+  #tta-toggle input:checked + .tta-track .tta-knob { transform: translateX(16px); }
+  #tta-toggle.on .tta-label { color: var(--text); }
+  .tta-label { font-weight: 600; }
+
+  /* ---- main split ---- */
+  main { flex: 1; display: flex; min-height: 0; }
+  #gallery-pane {
+    flex: 0 0 280px; display: flex; flex-direction: column;
+    border-right: 1px solid var(--border); min-height: 0;
+  }
+  .filters { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
+  .filters button {
+    flex: 1; background: #11141c; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 0; font-size: 11px;
+  }
+  .filters button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #grid { flex: 1; overflow-y: auto; padding: 8px; display: grid;
+          grid-template-columns: repeat(3, 1fr); gap: 6px; align-content: start; }
+  .thumb { position: relative; aspect-ratio: 1; border-radius: 6px; overflow: hidden;
+           border: 2px solid transparent; cursor: pointer; background: #000; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb.sel { border-color: var(--accent); }
+  .thumb.sel.ok { border-color: var(--cut); }
+  .thumb.sel.bad { border-color: var(--danger); }
+  .thumb .gt { position: absolute; bottom: 0; left: 0; right: 0; font-size: 9px;
+               text-align: center; background: rgba(0,0,0,.6); }
+  .gallery-foot { flex: 0 0 auto; padding: 10px; border-top: 1px solid var(--border); }
+  .gallery-foot button {
+    width: 100%; margin-top: 8px; background: var(--accent); color: #fff;
+    border: none; border-radius: 7px; padding: 9px; font-weight: 600;
+  }
+  .gallery-foot button:disabled { background: #2a2d3a; color: var(--muted); cursor: not-allowed; }
+
+  /* ---- tabs ---- */
+  #tab-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .tab-bar { display: flex; gap: 4px; padding: 8px 12px 0; border-bottom: 1px solid var(--border); }
+  .tab-bar button {
+    background: none; border: none; color: var(--muted); padding: 8px 16px;
+    border-bottom: 2px solid transparent; font-weight: 600;
+  }
+  .tab-bar button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab-body { flex: 1; overflow-y: auto; padding: 18px; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .card { background: var(--surface); border: 1px solid var(--border);
+          border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .card h3 { margin: 0 0 12px; font-size: 13px; color: var(--muted); font-weight: 600; }
+
+  /* ---- probability bars ---- */
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+  .bar-row .lbl { width: 72px; font-size: 12px; }
+  .bar-track { flex: 1; height: 18px; background: #11141c; border-radius: 5px; overflow: hidden; }
+  .bar-fill { height: 100%; width: 0; transition: width .35s ease; border-radius: 5px; }
+  .bar-row .val { width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ---- threshold slider ---- */
+  input[type=range] { -webkit-appearance: none; width: 100%; height: 6px; border-radius: 4px;
+                      background: var(--border); outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px;
+    border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid #fff; }
+  input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); cursor: pointer; border: 2px solid #fff; }
+  .slider-head { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
+
+  .verdict { display: inline-block; padding: 6px 16px; border-radius: 8px; font-weight: 700;
+             font-size: 16px; color: #fff; letter-spacing: .5px; }
+  .flip { margin-left: 12px; font-size: 12px; color: var(--accent); }
+  .gt-mark { margin-left: 12px; font-weight: 700; }
+  .preview { max-width: 200px; border-radius: 8px; border: 1px solid var(--border); }
+
+  /* ---- batch grid ---- */
+  .batch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+  .batch-card { border-radius: 8px; overflow: hidden; border: 1px solid var(--border);
+                background: #11141c; }
+  .batch-card img { width: 100%; height: 90px; object-fit: cover; display: block; }
+  .batch-card .meta { padding: 6px 8px; font-size: 11px; transition: background .3s; }
+  .batch-card .meta .v { font-weight: 700; }
+  .batch-card .meta .batch-gt { margin-top: 3px; font-weight: 700; }
+
+  /* ---- attention canvas ---- */
+  .canvas-wrap { position: relative; display: inline-block; line-height: 0; }
+  .canvas-wrap canvas { position: absolute; top: 0; left: 0; border-radius: 8px; }
+  .canvas-wrap canvas#att-base { position: relative; }
+  #att-heat { transition: opacity .15s; }
+
+  /* ---- t-SNE / plots ---- */
+  .plot-wrap { position: relative; }
+  #tsne-plot, #vram-plot { width: 100%; height: 360px; }
+  .overlay { position: absolute; inset: 0; background: rgba(15,17,23,.82);
+             display: flex; flex-direction: column; align-items: center; justify-content: center;
+             border-radius: 10px; gap: 10px; }
+  .overlay.hidden { display: none; }
+  .progress { width: 240px; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .hint { color: var(--muted); font-size: 13px; padding: 30px; text-align: center; }
+  .btn-sm { background: #11141c; color: var(--text); border: 1px solid var(--border);
+            border-radius: 6px; padding: 7px 14px; }
+  .btn-sm:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- ============================== SECTION 2: TEMPLATE ============================== -->
+<header>
+  <h1>철스크랩 위험 분류 데모</h1>
+  <div class="model-card" id="model-card"><span class="muted">모델 정보 로딩 중…</span></div>
+  <label id="tta-toggle" title="TTA: 원본 + 좌우반전 logit 평균">
+    <input type="checkbox" id="tta-check">
+    <span class="tta-track"><span class="tta-knob"></span></span>
+    <span class="tta-label">TTA</span>
+  </label>
+  <div id="dropzone">
+    <span id="dz-label"><b>가중치 업로드</b><br>.pt / .pth / .ckpt 끌어놓기 또는 클릭</span>
+    <input type="file" id="file-input" accept=".pt,.pth,.ckpt" hidden>
+  </div>
+</header>
+
+<main>
+  <!-- 좌측 갤러리 -->
+  <aside id="gallery-pane">
+    <div class="filters" id="filters">
+      <button data-f="all" class="active">전체</button>
+      <button data-f="cut">cut</button>
+      <button data-f="danger">danger</button>
+      <button data-f="excluded">excluded</button>
+    </div>
+    <div id="grid"></div>
+    <div class="gallery-foot">
+      <span id="sel-count" class="muted">0개 선택됨</span>
+      <button id="run-btn" disabled>추론 실행</button>
+    </div>
+  </aside>
+
+  <!-- 우측 탭 -->
+  <section id="tab-pane">
+    <div class="tab-bar" id="tab-bar">
+      <button data-t="infer" class="active">추론결과</button>
+      <button data-t="viz">시각화</button>
+      <button data-t="cost">비용</button>
+    </div>
+    <div class="tab-body">
+      <div class="tab-panel active" id="panel-infer"></div>
+
+      <div class="tab-panel" id="panel-viz">
+        <div class="card">
+          <h3>Attention Map</h3>
+          <div id="att-controls">
+            <button class="btn-sm" id="att-load">attention 로드</button>
+            <span class="muted" id="att-hint">  단일 이미지를 선택하세요</span>
+            <div style="margin-top:12px;display:flex;align-items:center;gap:10px;max-width:360px">
+              <span class="muted" style="font-size:12px">opacity</span>
+              <input type="range" id="att-opacity" min="0" max="1" step="0.05" value="0.6">
+            </div>
+          </div>
+          <div style="margin-top:14px"><div class="canvas-wrap">
+            <canvas id="att-base"></canvas><canvas id="att-heat"></canvas>
+          </div></div>
+        </div>
+        <div class="card">
+          <h3>t-SNE (testset feature space)</h3>
+          <div class="plot-wrap">
+            <div id="tsne-plot"></div>
+            <div class="overlay hidden" id="tsne-overlay">
+              <span>임베딩 재계산 중…</span>
+              <div class="progress"><div id="tsne-prog"></div></div>
+              <span class="muted" id="tsne-prog-txt"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-panel" id="panel-cost"></div>
+    </div>
+  </section>
+</main>
+
+<!-- ============================== SECTION 3: PLOTLY ============================== -->
+<script src="./plotly.min.js"></script>
+
+<!-- ============================== SECTION 4: APP (classic IIFE) ============================== -->
+<script>
+(function () {
+  "use strict";
+
+  // -------------------------------- config --------------------------------
+  var API_BASE = location.protocol === "file:" ? "http://localhost:8000" : "";
+  var CLASSES = ["cut", "danger", "excluded"];
+  var CLASS_COLOR = { cut: "#2a7", danger: "#e23", excluded: "#999" };
+  var DEFAULT_T = 0.5;
+
+  // -------------------------------- store (pub/sub) -----------------------
+  var state = {
+    gallery: [], filter: "all", selectedIds: [],
+    results: {}, threshold: DEFAULT_T, model: null,
+    activeTab: "infer", tsne: { status: "idle", points: [] },
+    attnOpacity: 0.6, batchProgress: null, tta: false
+  };
+  var subs = [];
+  function setState(patch) { for (var k in patch) state[k] = patch[k]; subs.forEach(function (f) { f(state); }); }
+  function subscribe(f) { subs.push(f); }
+
+  // -------------------------------- api -----------------------------------
+  function getJSON(path) { return fetch(API_BASE + path).then(function (r) { return r.json(); }); }
+  function postJSON(path, body) {
+    return fetch(API_BASE + path, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); });
+  }
+  function imageURL(id) { return API_BASE + "/image/" + encodeURIComponent(id); }
+  function ttaParam(sep) { return state.tta ? sep + "tta=true" : ""; }
+
+  // -------------------------------- lib -----------------------------------
+  // Threshold rule: P(danger) >= T -> danger, else argmax(cut, excluded).
+  function decide(p, t) {
+    if (p.danger >= t) return "danger";
+    return p.cut >= p.excluded ? "cut" : "excluded";
+  }
+  // Plain-language reading of the threshold: lower = more sensitive, higher = conservative.
+  function sensitivityLabel(t) {
+    if (Math.abs(t - DEFAULT_T) < 0.005) return "기본값";
+    return t < DEFAULT_T ? "민감 (위험을 더 많이 잡음)" : "보수적 (확실한 위험만 잡음)";
+  }
+  function fmt(x, n) { return (x == null || isNaN(x)) ? "—" : Number(x).toFixed(n == null ? 3 : n); }
+  function gtLabel(id) {
+    for (var i = 0; i < state.gallery.length; i++) if (state.gallery[i].id === id) return state.gallery[i].gt_label;
+    return null;
+  }
+  // Verdict-vs-ground-truth marker: green ✓ when correct, red ✗ when wrong.
+  function gtMark(id, verdict) {
+    var gt = gtLabel(id);
+    if (gt == null) return "";
+    var ok = verdict === gt;
+    return '<span class="gt-mark" style="color:' + (ok ? "var(--cut)" : "var(--danger)") + '">' +
+      (ok ? "✓" : "✗") + ' 정답: ' + gt + '</span>';
+  }
+  function mb(bytes) { return (bytes / 1048576).toFixed(1) + " MB"; }
+  function millions(n) { return (n / 1e6).toFixed(1) + "M"; }
+  // jet-like colormap, value 0..1 -> [r,g,b]
+  function jet(v) {
+    function c(x) { return Math.round(255 * Math.min(Math.max(x, 0), 1)); }
+    return [c(1.5 - Math.abs(4 * v - 3)), c(1.5 - Math.abs(4 * v - 2)), c(1.5 - Math.abs(4 * v - 1))];
+  }
+
+  // -------------------------------- model header --------------------------
+  function renderHeader() {
+    var m = state.model, c = document.getElementById("model-card");
+    if (!m) { c.innerHTML = '<span class="muted">모델 미로딩 — 가중치를 업로드하세요</span>'; return; }
+    c.innerHTML =
+      '<span class="pill">모델 <b>' + m.name + '</b> (' + m.model_type + '/' + m.head_kind + ')</span>' +
+      '<span class="pill">파라미터 <b>' + millions(m.params) + '</b></span>' +
+      '<span class="pill">파일 <b>' + mb(m.file_size_bytes) + '</b></span>' +
+      '<span class="pill">VRAM <b>' + (m.vram_mb == null ? "CPU" : Math.round(m.vram_mb) + " MB") + '</b></span>' +
+      '<span class="pill">device <b>' + m.device + '</b></span>';
+  }
+
+  // -------------------------------- upload --------------------------------
+  var DZ_DEFAULT = '<b>가중치 업로드</b><br>.pt / .pth / .ckpt 끌어놓기 또는 클릭';
+  var ALLOWED_EXT = [".pt", ".pth", ".ckpt"];
+  var _dragDepth = 0;  // enter/leave fire per child; count to avoid feedback flicker
+
+  function dzLabel(html) { document.getElementById("dz-label").innerHTML = html; }
+  function hasAllowedExt(name) {
+    return ALLOWED_EXT.some(function (e) { return name.toLowerCase().endsWith(e); });
+  }
+
+  function initUpload() {
+    var dz = document.getElementById("dropzone"), input = document.getElementById("file-input");
+
+    // Click anywhere on the zone opens the file dialog. Ignore the bubbled
+    // click from the programmatic input.click() to avoid re-opening twice.
+    dz.addEventListener("click", function (ev) { if (ev.target !== input) input.click(); });
+    input.addEventListener("change", function () {
+      if (input.files[0]) uploadModel(input.files[0]);
+      input.value = "";  // allow re-selecting the same file later
+    });
+
+    // Stop the browser from navigating to a file dropped anywhere in the window.
+    ["dragover", "drop"].forEach(function (e) {
+      window.addEventListener(e, function (ev) { ev.preventDefault(); });
+    });
+
+    dz.addEventListener("dragenter", function (ev) {
+      ev.preventDefault(); _dragDepth++; dz.classList.add("drag");
+    });
+    dz.addEventListener("dragover", function (ev) {
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";  // show the copy cursor
+    });
+    dz.addEventListener("dragleave", function () {
+      _dragDepth = Math.max(0, _dragDepth - 1);
+      if (_dragDepth === 0) dz.classList.remove("drag");
+    });
+    dz.addEventListener("drop", function (ev) {
+      ev.preventDefault(); _dragDepth = 0; dz.classList.remove("drag");
+      var dt = ev.dataTransfer;
+      var file = dt && dt.files && dt.files[0];
+      if (!file) return;
+      if (!hasAllowedExt(file.name)) { alert("지원 형식: .pt / .pth / .ckpt"); return; }
+      uploadModel(file);
+    });
+  }
+
+  function uploadModel(file) {
+    dzLabel("업로드 중… " + file.name);          // only the label changes; input stays in the DOM
+    var fd = new FormData(); fd.append("file", file);
+    fetch(API_BASE + "/model/upload", { method: "POST", body: fd })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        dzLabel(DZ_DEFAULT);
+        if (!res.ok) { alert("로드 실패: " + (res.j.detail || "")); return; }
+        setState({ model: res.j, results: {} });      // results invalidated by new model
+        watchTsne();                                    // backend recomputes embeddings
+        if (state.activeTab === "cost") loadCost();
+      })
+      .catch(function (err) { dzLabel(DZ_DEFAULT); alert("업로드 실패: " + err); });
+  }
+
+  // -------------------------------- tta toggle ----------------------------
+  function initTta() {
+    var box = document.getElementById("tta-check");
+    box.addEventListener("change", function () {
+      document.getElementById("tta-toggle").classList.toggle("on", this.checked);
+      setState({ tta: this.checked });
+      if (state.selectedIds.length) runInference();  // re-score current selection with the new setting
+    });
+  }
+
+  // -------------------------------- gallery -------------------------------
+  function initGallery() {
+    document.getElementById("filters").addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b) return;
+      [].forEach.call(this.children, function (x) { x.classList.remove("active"); });
+      b.classList.add("active"); setState({ filter: b.dataset.f });
+    });
+    document.getElementById("grid").addEventListener("click", function (e) {
+      var t = e.target.closest(".thumb"); if (!t) return;
+      var id = t.dataset.id, sel = state.selectedIds.slice();
+      if (e.ctrlKey || e.metaKey) {
+        var i = sel.indexOf(id); if (i >= 0) sel.splice(i, 1); else sel.push(id);
+      } else { sel = [id]; }
+      setState({ selectedIds: sel });
+    });
+    document.getElementById("run-btn").addEventListener("click", runInference);
+  }
+  function renderGallery() {
+    var grid = document.getElementById("grid");
+    var items = state.gallery.filter(function (g) {
+      return state.filter === "all" || g.gt_label === state.filter;
+    });
+    grid.innerHTML = items.map(function (g) {
+      var cls = "";
+      if (state.selectedIds.indexOf(g.id) >= 0) {
+        cls = " sel";
+        var r = state.results[g.id];
+        if (r) cls += decide(r.probs, state.threshold) === g.gt_label ? " ok" : " bad";
+      }
+      return '<div class="thumb' + cls + '" data-id="' + g.id + '" title="' + g.id + '">' +
+        '<img loading="lazy" src="' + imageURL(g.id) + '">' +
+        '<div class="gt">' + g.gt_label + '</div></div>';
+    }).join("");
+    var n = state.selectedIds.length;
+    document.getElementById("sel-count").textContent = n + "개 선택됨";
+    document.getElementById("run-btn").disabled = n === 0 || !state.model;
+  }
+
+  // -------------------------------- inference -----------------------------
+  function runInference() {
+    var ids = state.selectedIds; if (!ids.length) return;
+    if (ids.length === 1) {
+      postJSON("/infer" + ttaParam("?"), { id: ids[0] }).then(function (r) {
+        var res = Object.assign({}, state.results);
+        res[r.id] = { probs: r.probs, latency_ms: r.latency_ms };
+        setState({ results: res });
+      });
+      return;
+    }
+    setState({ batchProgress: { done: 0, total: ids.length } });
+    var es = new EventSource(API_BASE + "/infer/batch/stream?ids=" + ids.map(encodeURIComponent).join(",") + ttaParam("&"));
+    es.addEventListener("progress", function (ev) {
+      setState({ batchProgress: JSON.parse(ev.data) });
+    });
+    es.addEventListener("done", function (ev) {
+      var data = JSON.parse(ev.data), res = Object.assign({}, state.results);
+      data.results.forEach(function (r) { res[r.id] = { probs: r.probs, latency_ms: r.latency_ms }; });
+      setState({ results: res, batchProgress: null });
+      es.close();
+    });
+    es.onerror = function () { setState({ batchProgress: null }); es.close(); };
+  }
+
+  function renderInfer() {
+    var el = document.getElementById("panel-infer"), ids = state.selectedIds;
+    if (!ids.length) { el.innerHTML = '<div class="hint">왼쪽에서 이미지를 선택하세요.<br>Ctrl+클릭으로 다중 선택 → 배치 처리.</div>'; return; }
+    if (ids.length === 1) { renderSingle(el, ids[0]); return; }
+    renderBatch(el, ids);
+  }
+
+  function thresholdCard() {
+    var t = state.threshold;
+    return '<div class="card"><h3>위험 감지 민감도</h3>' +
+      '<div class="slider-head"><span>T = <b>' + t.toFixed(2) + '</b> · ' + sensitivityLabel(t) + '</span>' +
+      '<span class="muted">슬라이더를 조정하면 판정이 바뀝니다</span></div>' +
+      '<input type="range" id="thr" min="0" max="1" step="0.01" value="' + t + '"></div>';
+  }
+  function bindThreshold() {
+    var thr = document.getElementById("thr");
+    if (thr) thr.addEventListener("input", function () { setState({ threshold: parseFloat(this.value) }); });
+  }
+  function flipCount() {
+    var n = 0;
+    Object.keys(state.results).forEach(function (id) {
+      if (state.selectedIds.indexOf(id) < 0) return;
+      var p = state.results[id].probs;
+      if (decide(p, state.threshold) !== decide(p, DEFAULT_T)) n++;
+    });
+    return n;
+  }
+
+  function renderSingle(el, id) {
+    var r = state.results[id];
+    var html = '<div class="card"><h3>선택 이미지</h3>' +
+      '<img class="preview" src="' + imageURL(id) + '"><div class="muted" style="margin-top:6px">' + id + '</div></div>';
+    if (!r) {
+      el.innerHTML = html + '<div class="hint">「추론 실행」을 눌러 결과를 확인하세요.</div>';
+      return;
+    }
+    var p = r.probs, verdict = decide(p, state.threshold);
+    var bars = CLASSES.map(function (c) {
+      return '<div class="bar-row"><span class="lbl">' + c + '</span>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + (p[c] * 100).toFixed(1) +
+        '%;background:' + CLASS_COLOR[c] + '"></div></div>' +
+        '<span class="val">' + fmt(p[c]) + '</span></div>';
+    }).join("");
+    el.innerHTML = html +
+      '<div class="card"><h3>클래스별 확률</h3>' + bars + '</div>' +
+      thresholdCard() +
+      '<div class="card"><h3>판정</h3>' +
+      '<span class="verdict" style="background:' + CLASS_COLOR[verdict] + '">' + verdict.toUpperCase() + '</span>' +
+      gtMark(id, verdict) +
+      '<span class="flip">기본값(' + DEFAULT_T.toFixed(2) + ') 대비 ' + flipCount() + '장 판정 변경됨</span>' +
+      '<div class="muted" style="margin-top:12px">Latency: ' + fmt(r.latency_ms, 1) + ' ms/img</div></div>';
+    bindThreshold();
+  }
+
+  function renderBatch(el, ids) {
+    var prog = "";
+    if (state.batchProgress) {
+      var bp = state.batchProgress;
+      prog = '<div class="card"><h3>배치 추론 중</h3><div class="progress"><div style="width:' +
+        (bp.done / bp.total * 100) + '%"></div></div><div class="muted" style="margin-top:6px">' +
+        bp.done + " / " + bp.total + '</div></div>';
+    }
+    var cards = ids.map(function (id) {
+      var r = state.results[id];
+      if (!r) return '<div class="batch-card"><img src="' + imageURL(id) + '">' +
+        '<div class="meta muted">미추론</div></div>';
+      var v = decide(r.probs, state.threshold), gt = gtLabel(id), ok = v === gt;
+      var edge = gt == null ? "var(--border)" : (ok ? "var(--cut)" : "var(--danger)");
+      return '<div class="batch-card" style="border:2px solid ' + edge + '"><img src="' + imageURL(id) + '">' +
+        '<div class="meta" style="background:' + CLASS_COLOR[v] + '33;border-top:2px solid ' + CLASS_COLOR[v] + '">' +
+        '<span class="v" style="color:' + CLASS_COLOR[v] + '">' + v.toUpperCase() + '</span> ' +
+        fmt(r.probs[v], 2) +
+        (gt == null ? "" : '<div class="batch-gt" style="color:' + (ok ? "var(--cut)" : "var(--danger)") + '">' +
+          (ok ? "✓" : "✗") + ' 정답: ' + gt + '</div>') +
+        '</div></div>';
+    }).join("");
+    var lats = ids.map(function (id) { return state.results[id]; }).filter(Boolean)
+      .map(function (r) { return r.latency_ms; });
+    var avg = lats.length ? lats.reduce(function (a, b) { return a + b; }, 0) / lats.length : null;
+    el.innerHTML = prog + thresholdCard() +
+      '<div class="card"><h3>배치 결과 (' + ids.length + '장' +
+      (avg ? ', 평균 ' + fmt(avg, 1) + ' ms/img' : '') + ')</h3>' +
+      '<span class="flip">기본값(' + DEFAULT_T.toFixed(2) + ') 대비 ' + flipCount() + '장 판정 변경됨</span>' +
+      '<div class="batch-grid" style="margin-top:12px">' + cards + '</div></div>';
+    bindThreshold();
+  }
+
+  // -------------------------------- tabs ----------------------------------
+  function initTabs() {
+    document.getElementById("tab-bar").addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b) return;
+      [].forEach.call(this.children, function (x) { x.classList.remove("active"); });
+      b.classList.add("active");
+      var t = b.dataset.t;
+      ["infer", "viz", "cost"].forEach(function (name) {
+        document.getElementById("panel-" + name).classList.toggle("active", name === t);
+      });
+      setState({ activeTab: t });
+      if (t === "viz") renderTsne();
+      if (t === "cost") loadCost();
+    });
+  }
+
+  // -------------------------------- attention -----------------------------
+  function initViz() {
+    document.getElementById("att-load").addEventListener("click", loadAttention);
+    document.getElementById("att-opacity").addEventListener("input", function () {
+      state.attnOpacity = parseFloat(this.value);
+      document.getElementById("att-heat").style.opacity = state.attnOpacity;
+    });
+  }
+  function loadAttention() {
+    var id = state.selectedIds[0];
+    if (!id) { alert("단일 이미지를 먼저 선택하세요."); return; }
+    document.getElementById("att-hint").textContent = "  로딩 중…";
+    postJSON("/attention", { id: id }).then(function (a) {
+      document.getElementById("att-hint").textContent = "  " + id;
+      drawAttention(id, a.grid, a.gh, a.gw);
+    });
+  }
+  function drawAttention(id, grid, gh, gw) {
+    var base = document.getElementById("att-base"), heat = document.getElementById("att-heat");
+    var img = new Image(); img.crossOrigin = "anonymous";
+    img.onload = function () {
+      var W = 360, H = Math.round(W * img.height / img.width);
+      [base, heat].forEach(function (c) { c.width = W; c.height = H; });
+      base.getContext("2d").drawImage(img, 0, 0, W, H);
+      var off = document.createElement("canvas"); off.width = gw; off.height = gh;
+      var octx = off.getContext("2d"), imgData = octx.createImageData(gw, gh);
+      for (var y = 0; y < gh; y++) for (var x = 0; x < gw; x++) {
+        var rgb = jet(grid[y][x]), k = (y * gw + x) * 4;
+        imgData.data[k] = rgb[0]; imgData.data[k + 1] = rgb[1]; imgData.data[k + 2] = rgb[2]; imgData.data[k + 3] = 255;
+      }
+      octx.putImageData(imgData, 0, 0);
+      var hctx = heat.getContext("2d");
+      hctx.clearRect(0, 0, W, H); hctx.imageSmoothingEnabled = true;
+      hctx.drawImage(off, 0, 0, W, H);
+      heat.style.opacity = state.attnOpacity;
+    };
+    img.src = imageURL(id);
+  }
+
+  // -------------------------------- t-SNE ---------------------------------
+  function watchTsne() {
+    setState({ tsne: { status: "computing", points: [] } });
+    showTsneOverlay(true, 0, 0);
+    var es = new EventSource(API_BASE + "/tsne/stream");
+    es.addEventListener("progress", function (ev) {
+      var d = JSON.parse(ev.data); showTsneOverlay(true, d.done, d.total);
+    });
+    es.addEventListener("done", function (ev) {
+      var d = JSON.parse(ev.data);
+      setState({ tsne: { status: d.status, points: d.points || [] } });
+      showTsneOverlay(false); es.close();
+      if (state.activeTab === "viz") renderTsne();
+    });
+    es.onerror = function () { showTsneOverlay(false); es.close(); };
+  }
+  function showTsneOverlay(show, done, total) {
+    var ov = document.getElementById("tsne-overlay");
+    ov.classList.toggle("hidden", !show);
+    if (show && total) {
+      document.getElementById("tsne-prog").style.width = (done / total * 100) + "%";
+      document.getElementById("tsne-prog-txt").textContent = done + " / " + total;
+    }
+  }
+  function renderTsne() {
+    if (!window.Plotly || state.tsne.status !== "ready") return;
+    var pts = state.tsne.points, traces = [];
+    CLASSES.forEach(function (c) {
+      var sub = pts.filter(function (p) { return p.gt_label === c; });
+      traces.push({
+        type: "scattergl", mode: "markers", name: c,
+        x: sub.map(function (p) { return p.x; }), y: sub.map(function (p) { return p.y; }),
+        text: sub.map(function (p) { return p.id + " (" + p.gt_label + ")"; }),
+        hoverinfo: "text", marker: { size: 9, color: CLASS_COLOR[c], opacity: .75 }
+      });
+    });
+    var selPts = pts.filter(function (p) { return state.selectedIds.indexOf(p.id) >= 0; });
+    if (selPts.length) traces.push({
+      type: "scattergl", mode: "markers", name: "선택", showlegend: true,
+      x: selPts.map(function (p) { return p.x; }), y: selPts.map(function (p) { return p.y; }),
+      text: selPts.map(function (p) { return p.id; }), hoverinfo: "text",
+      marker: { size: 18, color: "rgba(0,0,0,0)", line: { color: "#fff", width: 3 } }
+    });
+    Plotly.react("tsne-plot", traces, plotLayout("t-SNE"), { displayModeBar: false, responsive: true });
+  }
+
+  // -------------------------------- cost ----------------------------------
+  function loadCost() {
+    var el = document.getElementById("panel-cost");
+    if (!state.model) { el.innerHTML = '<div class="hint">모델이 로드되지 않았습니다.</div>'; return; }
+    el.innerHTML = '<div class="hint">측정 중… (warmup + 배치 sweep)</div>';
+    getJSON("/cost").then(function (c) { renderCost(el, c); });
+  }
+  function renderCost(el, c) {
+    var m = state.model;
+    var lat = c.latency;
+    var rows = c.vram_by_batch.map(function (v) {
+      return '<tr><td>batch ' + v.batch + '</td><td class="num">' +
+        (v.vram_mb == null ? "CPU" : Math.round(v.vram_mb) + " MB") + '</td></tr>';
+    }).join("");
+    el.innerHTML =
+      '<div class="card"><h3>모델 요약</h3><table>' +
+      '<tr><th>모델</th><td>' + m.name + ' (' + m.model_type + ')</td></tr>' +
+      '<tr><th>파라미터 수</th><td class="num">' + c.params.toLocaleString() + '</td></tr>' +
+      '<tr><th>파일 크기</th><td class="num">' + mb(c.file_size_bytes) + '</td></tr></table></div>' +
+      '<div class="card"><h3>배치 사이즈별 VRAM</h3><div id="vram-plot"></div>' +
+      '<table style="margin-top:10px">' + rows + '</table></div>' +
+      '<div class="card"><h3>Latency (batch=1)</h3><table>' +
+      '<tr><th>p50</th><td class="num">' + fmt(lat.p50, 2) + ' ms</td></tr>' +
+      '<tr><th>p95</th><td class="num">' + fmt(lat.p95, 2) + ' ms</td></tr>' +
+      '<tr><th>p99</th><td class="num">' + fmt(lat.p99, 2) + ' ms</td></tr></table></div>';
+    var bv = c.vram_by_batch.filter(function (v) { return v.vram_mb != null; });
+    if (window.Plotly && bv.length) {
+      Plotly.react("vram-plot", [{
+        type: "bar", x: bv.map(function (v) { return "bs " + v.batch; }),
+        y: bv.map(function (v) { return v.vram_mb; }), marker: { color: "#4f8ef7" },
+        text: bv.map(function (v) { return Math.round(v.vram_mb) + " MB"; }), textposition: "outside"
+      }], plotLayout("peak VRAM (MB)"), { displayModeBar: false, responsive: true });
+    }
+  }
+
+  function plotLayout(title) {
+    return {
+      title: { text: title, font: { size: 12, color: "#8b90a0" } },
+      paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+      font: { color: "#e8eaf0" }, margin: { l: 45, r: 15, t: 30, b: 35 },
+      legend: { orientation: "h", y: -0.15 },
+      xaxis: { gridcolor: "#2a2d3a", zeroline: false }, yaxis: { gridcolor: "#2a2d3a", zeroline: false }
+    };
+  }
+
+  // -------------------------------- init ----------------------------------
+  function boot() {
+    initUpload(); initTta(); initGallery(); initTabs(); initViz();
+    subscribe(renderHeader); subscribe(renderGallery); subscribe(renderInfer);
+    subscribe(function () { if (state.activeTab === "viz") renderTsne(); });
+
+    getJSON("/gallery").then(function (g) { setState({ gallery: g }); });
+    getJSON("/model").then(function (m) { if (m && !m.detail) setState({ model: m }); })
+      .catch(function () {});
+    getJSON("/tsne").then(function (t) {
+      if (t.status === "ready") setState({ tsne: t });
+      else watchTsne();
+    }).catch(function () {});
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

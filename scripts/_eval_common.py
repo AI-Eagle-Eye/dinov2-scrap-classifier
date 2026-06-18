@@ -187,19 +187,30 @@ def collect_outputs(
     loader: DataLoader,
     device: torch.device,
     tta: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    return_features: bool = False,
+) -> tuple[np.ndarray, ...]:
     """전체 추론 → (logits [N, 3], probs [N, 3], labels [N]).
 
     tta=True: 원본 + hflip의 logits/softmax를 평균한다 (probs는 softmax 평균).
+    return_features=True: CLS 임베딩 feats [N, D]를 4번째로 추가 반환 (tta면 원본+flip 평균).
     """
     all_logits: list[np.ndarray] = []
     all_probs: list[np.ndarray] = []
     all_labels: list[int] = []
+    all_feats: list[np.ndarray] = []
     for images, labels in loader:
         images = images.to(device)
-        logits = model(images)
+        if return_features:
+            cls, logits = model.forward_features(images)
+        else:
+            logits = model(images)
         if tta:
-            logits_flip = model(torch.flip(images, dims=[3]))
+            flipped = torch.flip(images, dims=[3])
+            if return_features:
+                cls_flip, logits_flip = model.forward_features(flipped)
+                cls = (cls + cls_flip) / 2
+            else:
+                logits_flip = model(flipped)
             probs = (torch.softmax(logits, dim=1) + torch.softmax(logits_flip, dim=1)) / 2
             logits = (logits + logits_flip) / 2
         else:
@@ -207,11 +218,16 @@ def collect_outputs(
         all_logits.append(logits.cpu().numpy())
         all_probs.append(probs.cpu().numpy())
         all_labels.extend(labels.tolist())
-    return (
+        if return_features:
+            all_feats.append(cls.cpu().numpy())
+    outputs = (
         np.concatenate(all_logits, axis=0),
         np.concatenate(all_probs, axis=0),
         np.array(all_labels, dtype=int),
     )
+    if return_features:
+        return (*outputs, np.concatenate(all_feats, axis=0))
+    return outputs
 
 
 def apply_threshold(probs: np.ndarray, threshold: float) -> list[int]:

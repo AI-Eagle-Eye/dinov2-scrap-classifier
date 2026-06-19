@@ -468,6 +468,21 @@ def write_risk_coverage_curve(
     plt.close(fig)
 
 
+def danger_risk_coverage_arrays(
+    probs: np.ndarray, labels: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """danger threshold sweep → (coverage, precision_danger, miss_rate), coverage 오름차순.
+
+    write_risk_coverage_curve와 동일한 _risk_coverage_rows 정의를 재사용한다(시각화 모듈 공유용).
+    """
+    rows = [r for r in _risk_coverage_rows(probs, labels) if r["coverage"] > 0]
+    rows.sort(key=lambda r: r["coverage"])
+    cov = np.array([r["coverage"] for r in rows])
+    prec = np.array([r["precision_danger"] for r in rows])
+    miss = np.array([r["miss_rate"] for r in rows])
+    return cov, prec, miss
+
+
 def _select_operating_point(
     rows: list[dict[str, float]], constraint_key: str, op: str, limit: float,
     objective_key: str,

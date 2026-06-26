@@ -7,16 +7,26 @@ import torch.nn as nn
 _DEFAULT_ECE_BINS: int = 15
 
 
+def confidence_bin_masks(
+    confidences: np.ndarray, n_bins: int = _DEFAULT_ECE_BINS,
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    """max-confidence 등간격 binning. (bin_edges, bin별 boolean mask) 반환 (빈 bin 포함).
+
+    bin 규칙은 (lo, hi] 반열림 — compute_ece/reliability 다이어그램 전반의 단일 출처.
+    """
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    masks = [(confidences > lo) & (confidences <= hi) for lo, hi in zip(edges[:-1], edges[1:])]
+    return edges, masks
+
+
 def compute_ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = _DEFAULT_ECE_BINS) -> float:
     """Expected Calibration Error (max-confidence, equal-width binning)."""
     confidences = probs.max(axis=1)
-    predictions = probs.argmax(axis=1)
-    accuracies = predictions == labels
-    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    accuracies = probs.argmax(axis=1) == labels
+    _, masks = confidence_bin_masks(confidences, n_bins)
     n = len(probs)
     ece = 0.0
-    for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
-        in_bin = (confidences > lo) & (confidences <= hi)
+    for in_bin in masks:
         count = int(in_bin.sum())
         if count == 0:
             continue

@@ -80,6 +80,11 @@ def _plot_threshold_sweep(
         das_rates.append(m["danger_as_safe_rate"])
         f1_macros.append(m["f1_macro"])
 
+    prec_arr, rec_arr = np.asarray(danger_prec), np.asarray(danger_rec)
+    denom = prec_arr + rec_arr
+    danger_f1 = np.divide(2 * prec_arr * rec_arr, denom, out=np.zeros_like(denom), where=denom > 0)
+    mark_t, mark_label = ra.precision_recall_crossing(thresholds, prec_arr, rec_arr, danger_f1)
+
     fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
     ax.plot(thresholds, danger_prec, color="#e74c3c", lw=2, label="danger precision")
     ax.plot(thresholds, danger_rec,  color="#e67e22", lw=2, label="danger recall",   linestyle="--")
@@ -87,6 +92,7 @@ def _plot_threshold_sweep(
     ax.plot(thresholds, f1_macros,   color="#2980b9", lw=2, label="f1 macro",        linestyle="-.")
     ax.axhline(y=_DAS_LIMIT, color="gray", lw=1.2, linestyle="--",
                label=f"DAS limit={_DAS_LIMIT}")
+    ax.axvline(x=mark_t, color="black", lw=1.4, linestyle="-", alpha=0.7, label=mark_label)
 
     ax.set_xlabel("Threshold (danger score)", fontsize=11)
     ax.set_ylabel("Rate", fontsize=11)

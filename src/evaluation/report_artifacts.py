@@ -18,14 +18,14 @@ import numpy as np
 import torch
 
 from ..data.dataset import CLASS_NAME_LIST, CUT, DANGER, EXCLUDED
-from .calibration import TemperatureScaler, compute_ece
+from .calibration import _DEFAULT_ECE_BINS, TemperatureScaler, compute_ece, confidence_bin_masks
 from .evaluator import compute_metrics, save_confusion_matrix
 from .threshold import apply_danger_threshold, apply_margin_rule
 
 _CLASS_NAMES: list[str] = CLASS_NAME_LIST
 CLASS_COLORS: list[str] = ["#2ecc71", "#e74c3c", "#3498db"]
 _EXCLUDED_IDX: int = EXCLUDED
-_RELIABILITY_BINS: int = 15
+_RELIABILITY_BINS: int = _DEFAULT_ECE_BINS
 
 # selective-prediction sweep 격자 (confidence = max softmax prob)
 RISK_COVERAGE_THRS: np.ndarray = np.round(np.linspace(0.0, 1.0, 101), 4)
@@ -290,15 +290,13 @@ def _reliability_bins(
     """(bin_center, bin_accuracy, bin_count). 빈 bin은 accuracy NaN."""
     conf = probs.max(axis=1)
     correct = probs.argmax(axis=1) == labels
-    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    edges, masks = confidence_bin_masks(conf, n_bins)
     centers = (edges[:-1] + edges[1:]) / 2
     acc = np.full(n_bins, np.nan)
-    count = np.zeros(n_bins, dtype=int)
-    for b, (lo, hi) in enumerate(zip(edges[:-1], edges[1:])):
-        mask = (conf > lo) & (conf <= hi)
-        count[b] = int(mask.sum())
+    count = np.array([int(m.sum()) for m in masks])
+    for b, m in enumerate(masks):
         if count[b] > 0:
-            acc[b] = float(correct[mask].mean())
+            acc[b] = float(correct[m].mean())
     return centers, acc, count
 
 
@@ -466,6 +464,26 @@ def write_risk_coverage_curve(
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+def precision_recall_crossing(
+    thr: np.ndarray, prec: np.ndarray, rec: np.ndarray, f1: np.ndarray,
+) -> tuple[float, str]:
+    """precision==recall 교차 threshold를 선형보간으로 탐지; 없으면 best-F1로 폴백.
+
+    skew된 타겟에서 best-F1이 무의미한 가장자리(thr≈0)에 박히는 문제를 피하려고,
+    sweep 곡선이 교차하는 균형 운영점을 우선 보고한다(시각화 모듈 공유용 pure 함수).
+    """
+    thr = np.asarray(thr, dtype=float)
+    diff = np.asarray(prec, dtype=float) - np.asarray(rec, dtype=float)
+    sign_change = np.where(np.diff(np.sign(diff)) != 0)[0]
+    if len(sign_change) > 0:
+        i = int(sign_change[0])
+        t0, t1, d0, d1 = thr[i], thr[i + 1], diff[i], diff[i + 1]
+        t_cross = t0 + (t1 - t0) * (-d0) / (d1 - d0) if d1 != d0 else t0
+        return float(t_cross), f"precision=recall 교차점 thr={t_cross:.2f}"
+    best_t = float(thr[int(np.argmax(f1))])
+    return best_t, f"best-F1 thr={best_t:.2f} (교차점 없음)"
 
 
 def danger_risk_coverage_arrays(

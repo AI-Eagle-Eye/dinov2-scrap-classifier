@@ -46,11 +46,6 @@ DISPLAY_NAME_MAP: dict[str, str] = {
 }
 
 
-def display_name(key: str) -> str:
-    """내부 지표 키를 출력용 표시명으로 변환. 매핑이 없으면 키를 그대로 반환."""
-    return DISPLAY_NAME_MAP.get(key, key)
-
-
 def assert_patch_compatible(image_size: int, backbone_name: str = "dinov2_vitb14") -> None:
     """DINOv2 patch14 백본은 image_size가 14의 배수여야 한다."""
     if "14" in backbone_name:

@@ -8,3 +8,7 @@ matplotlib
 numpy
 tqdm
 pyyaml
+
+# optional — figures.py의 UMAP 시각화(plot_umap)에만 필요. 미설치 시 graceful skip.
+# numba/llvmlite 의존성이 있어 numpy 버전 충돌 가능 → 별도 가상환경 설치 권장.
+# umap-learn

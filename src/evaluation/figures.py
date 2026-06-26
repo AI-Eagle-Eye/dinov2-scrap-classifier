@@ -43,6 +43,7 @@ from PIL import Image
 from sklearn.manifold import TSNE
 from sklearn.metrics import (
     average_precision_score,
+    f1_score,
     precision_recall_curve,
     roc_auc_score,
     roc_curve,
@@ -50,7 +51,7 @@ from sklearn.metrics import (
 
 from ..data.dataset import CLASS_NAME_LIST, CUT, DANGER
 from . import report_artifacts as ra
-from .calibration import compute_ece
+from .calibration import _DEFAULT_ECE_BINS, compute_ece, confidence_bin_masks
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -75,7 +76,7 @@ _SUMMARY_INDEX = "eval_target"  # 내 summary.csv 인덱스 컬럼 (팀원은 't
 _GALLERY_N = 9  # 3x3 그리드 — 썸네일을 크고 정렬되게 유지
 _GALLERY_COLS = 3
 _PANEL_TOP_N = 6
-_ECE_BINS = 10
+_ECE_BINS = _DEFAULT_ECE_BINS  # calibration 단일 출처 — 모든 산출물 ECE bin 수 통일
 _SAVE_DPI = 170
 _PROB_COLS = [f"prob_{c}" for c in CLASS_NAMES]
 
@@ -254,7 +255,7 @@ def plot_pr_roc(df: pd.DataFrame, out: Path) -> Path:
 
 
 def plot_threshold_sweep(sweep_csv: Path, out: Path) -> Path | None:
-    """threshold_sweep.csv(재추론 없음) → danger precision/recall/F1 곡선 + best-F1 수직선."""
+    """threshold_sweep.csv(재추론 없음) → danger precision/recall/F1 곡선 + precision=recall 교차점 수직선(없으면 best-F1 폴백)."""
     if not sweep_csv.exists():
         print(f"[skip] threshold_sweep: {sweep_csv.name} 없음")
         return None
@@ -264,12 +265,12 @@ def plot_threshold_sweep(sweep_csv: Path, out: Path) -> Path | None:
     rec = s["recall_danger"].to_numpy()
     denom = prec + rec
     f1 = np.divide(2 * prec * rec, denom, out=np.zeros_like(denom), where=denom > 0)
-    best_t = float(thr[int(np.argmax(f1))])
+    mark_t, mark_label = ra.precision_recall_crossing(thr, prec, rec, f1)
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(thr, prec, lw=2, label="danger precision")
     ax.plot(thr, rec, color=_DANGER_COLOR, lw=2, label="danger recall")
     ax.plot(thr, f1, lw=2, label="danger F1")
-    ax.axvline(best_t, color=_MUTED_COLOR, ls="--", lw=1.4, label=f"best-F1 thr={best_t:.2f}")
+    ax.axvline(mark_t, color=_MUTED_COLOR, ls="--", lw=1.4, label=mark_label)
     ax.set_xlabel("danger one-vs-rest threshold")
     ax.set_ylabel("score")
     ax.set_ylim(0, 1.02)
@@ -322,6 +323,128 @@ def plot_tsne(df: pd.DataFrame, emb_path: Path, out: Path) -> list[Path]:
     ax.set_yticks([])
     fig.tight_layout()
     saved.append(_save(fig, out, "tsne_correct.png"))
+    return saved
+
+
+# confidence-bin 다지표 reliability: (key, 축 제목, 한국어 캡션).
+# accuracy는 고전적 보정(대각선+ECE) 해석, 나머지는 "성능 vs 확신" 으로 읽는다.
+_REL_METRICS: list[tuple[str, str, str]] = [
+    ("accuracy", "accuracy", "전체 정확도 (보정)"),
+    ("danger_precision", "danger precision", "danger 예측의 정밀도"),
+    ("danger_recall", "danger recall (1 - miss)", "danger 놓치지 않은 비율"),
+    ("f1_macro", "macro F1", "클래스 균형 성능"),
+]
+
+
+def _bin_metric(metric: str, yt: np.ndarray, pred: np.ndarray, mask: np.ndarray) -> float:
+    """confidence bin 하나의 지표 값 (해당 bin에서 정의 불가면 NaN)."""
+    t, p = yt[mask], pred[mask]
+    if metric == "accuracy":
+        return float((p == t).mean())
+    if metric == "danger_precision":
+        sel = p == DANGER_IDX
+        return float((t[sel] == DANGER_IDX).mean()) if sel.any() else np.nan
+    if metric == "danger_recall":
+        pos = t == DANGER_IDX
+        return float((p[pos] == DANGER_IDX).mean()) if pos.any() else np.nan
+    return float(f1_score(t, p, average="macro", zero_division=0))  # f1_macro
+
+
+def plot_reliability(df: pd.DataFrame, out: Path, n_bins: int = _ECE_BINS) -> Path:
+    """2x2 confidence-bin 패널: accuracy(보정)+danger P/R+macro F1, bin 표본수 막대 오버레이."""
+    probs, yt = _probs(df), _labels(df, "true_label")
+    conf, pred = probs.max(1), probs.argmax(1)
+    _, masks = confidence_bin_masks(conf, n_bins)
+    masks = [m for m in masks if m.sum() > 0]
+    bin_conf = [conf[m].mean() for m in masks]
+    bin_n = [int(m.sum()) for m in masks]
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 11))
+    for ax, (key, ylabel, caption) in zip(axes.ravel(), _REL_METRICS):
+        ys = [_bin_metric(key, yt, pred, m) for m in masks]
+        twin = ax.twinx()  # 희소 bin이 보이도록 옅은 표본수 막대
+        twin.bar(bin_conf, bin_n, width=0.045, color=_MUTED_COLOR, alpha=0.30, zorder=0)
+        twin.set_ylabel("bin 표본 수", fontsize=11, color=_MUTED_COLOR)
+        twin.tick_params(axis="y", labelcolor=_MUTED_COLOR, labelsize=10)
+        if key == "accuracy":
+            ax.plot([0, 1], [0, 1], ls="--", color=_MUTED_COLOR, label="perfect", zorder=2)
+            ece = compute_ece(probs, yt, n_bins)  # calibration 단일 출처 재사용 (중복 계산 제거)
+            ax.set_title(f"{ylabel}  (ECE={ece:.3f})", fontsize=15)
+        else:
+            ax.set_title(ylabel, fontsize=15)
+        ax.plot(bin_conf, ys, "o-", color=_DANGER_COLOR, zorder=3, label="model")
+        ax.set_xlabel("confidence")
+        ax.set_ylabel(ylabel)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1.02)
+        ax.set_zorder(twin.get_zorder() + 1)  # 지표 선을 막대 위로
+        ax.patch.set_visible(False)
+        ax.text(0.5, -0.16, caption, transform=ax.transAxes, ha="center", va="top",
+                fontsize=11, style="italic", color=_MUTED_COLOR)
+        if key == "accuracy":
+            ax.legend(loc="lower right", fontsize=10)
+    fig.suptitle("Reliability / confidence-bin metrics (x = 모델 확신도)", fontsize=17)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    return _save(fig, out, "reliability_multi.png")
+
+
+def plot_umap(df: pd.DataFrame, emb_path: Path, out: Path) -> list[Path]:
+    """저장된 embeddings.npy 재사용 UMAP 2종 (클래스별 / 정답·오답) — 재추론 없음.
+
+    plot_tsne와 동일 입력/레이아웃. umap-learn은 optional(requirements 참고)이라
+    미설치 시 안내 후 스킵한다. embeddings 길이 불일치도 스킵.
+    """
+    if not emb_path.exists():
+        print(f"[skip] UMAP: {emb_path} 없음 — evaluate_test.py 재실행 필요")
+        return []
+    try:
+        import umap  # noqa: PLC0415
+    except ImportError:
+        print("[skip] UMAP: umap-learn 미설치 (pip install umap-learn)")
+        return []
+    feats = np.load(emb_path)
+    yt, yp = _labels(df, "true_label"), _labels(df, "pred_label")
+    if len(feats) != len(yt):
+        print(f"[skip] UMAP: 임베딩({len(feats)})과 predictions({len(yt)}) 길이 불일치 — 재실행 필요")
+        return []
+    n_neighbors = min(15, max(2, len(feats) - 1))  # 표본 수에 맞춘 이웃 수
+    emb = umap.UMAP(n_components=2, n_neighbors=n_neighbors,
+                    random_state=_TSNE_SEED).fit_transform(feats)
+    caption = "t-SNE/UMAP 모두 비선형 축소 — 거리·밀도 해석 금지 (군집의 상대적 분리만 참고)"
+    cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    saved: list[Path] = []
+
+    # 버전 1 — 클래스별 색
+    fig, ax = plt.subplots(figsize=(8, 7))
+    for i, cls in enumerate(CLASS_NAMES):
+        m = yt == i
+        color = _DANGER_COLOR if i == DANGER_IDX else cycle[i % len(cycle)]
+        ax.scatter(emb[m, 0], emb[m, 1], s=20, alpha=0.7, linewidths=0.3,
+                   edgecolors=_BG_COLOR, color=color, label=f"{cls} (n={int(m.sum())})")
+    ax.set_title("UMAP — CLS 임베딩 (true class)")
+    ax.legend(markerscale=1.5, framealpha=0.9)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.text(0.5, -0.06, caption, transform=ax.transAxes, ha="center", va="top",
+            fontsize=10, style="italic", color=_MUTED_COLOR)
+    fig.tight_layout()
+    saved.append(_save(fig, out, "umap_class.png"))
+
+    # 버전 2 — 정답/오답 색 (신규)
+    correct = yt == yp
+    fig, ax = plt.subplots(figsize=(8, 7))
+    ax.scatter(emb[correct, 0], emb[correct, 1], s=18, alpha=0.6, linewidths=0.3,
+               edgecolors=_BG_COLOR, color=_CORRECT_COLOR, label=f"correct (n={int(correct.sum())})")
+    ax.scatter(emb[~correct, 0], emb[~correct, 1], s=30, alpha=0.8, linewidths=0.3,
+               edgecolors=_BG_COLOR, color=_DANGER_COLOR, label=f"wrong (n={int((~correct).sum())})")
+    ax.set_title("UMAP — CLS 임베딩 (correct vs wrong)")
+    ax.legend(markerscale=1.4, framealpha=0.9)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.text(0.5, -0.06, caption, transform=ax.transAxes, ha="center", va="top",
+            fontsize=10, style="italic", color=_MUTED_COLOR)
+    fig.tight_layout()
+    saved.append(_save(fig, out, "umap_correct.png"))
     return saved
 
 
@@ -588,7 +711,9 @@ def main() -> None:
         saved.append(plot_confusion(df, out))
         saved.append(plot_pr_roc(df, out))
         ts = plot_threshold_sweep(tdir / "threshold_sweep.csv", out)
+        saved.append(plot_reliability(df, out))
         saved += plot_tsne(df, tdir / "embeddings.npy", out)
+        saved += plot_umap(df, tdir / "embeddings.npy", out)
         g1 = _gallery(df, DANGER_IDX, CUT_IDX, "prob_cut", testset_root, out,
                       "missed_danger_gallery.png", "Missed danger (true danger → pred cut)")
         g2 = _gallery(df, CUT_IDX, DANGER_IDX, "prob_danger", testset_root, out,
